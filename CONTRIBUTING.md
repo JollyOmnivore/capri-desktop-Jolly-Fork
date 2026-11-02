@@ -70,7 +70,7 @@ Readable web search checks use fake search results and loopback mock servers:
 dotnet run --project tests/WebSearchChecks/WebSearchChecks.csproj -c Release
 ```
 
-Add `-- --live http://127.0.0.1:8080 qwen3.5:9b` to also exercise an existing local SearXNG instance and a local Ollama model with a public test query. The normal checks never contact a search engine or use real credentials. The app smoke test uses a search fixture.
+The same suite tests search-to-open sequencing, returned-link validation, rejected extra tools, permission holds and cancellation against a mock model API. Add `-- --live http://127.0.0.1:8080 qwen3.5:9b` to also exercise an existing local SearXNG instance and a local Ollama model with public test queries, including finding and selecting the official Pocket TTS repo. Browser launches are intercepted in the tests. The normal checks never contact a search engine or use real credentials. The app smoke test uses a search fixture.
 
 ## House rules
 

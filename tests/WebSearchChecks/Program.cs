@@ -98,6 +98,7 @@ await Request("{}", 403, answer => Check(answer.Contains("enable JSON"), "disabl
 await Request("{}", 302, answer => Check(answer.Contains("HTTP 302"), "redirects are rejected instead of contacting another service"));
 await Request(new string('x', 1100000), 200, answer => Check(answer.Contains("too large"), "oversized service responses are rejected"));
 Check(browsers == 0, "none of the search tool calls opened a browser");
+int chained = await Chains.Run();
 
 if (args.Length >= 2 && args[0] == "--live")
 {
@@ -115,6 +116,14 @@ if (args.Length >= 2 && args[0] == "--live")
         string reply = (string)Call(brain, model, "Ask", "Search the web for who makes Pocket TTS and answer from the search results with a source URL.");
         Console.WriteLine("Local model public test: " + searches + " searches; " + reply);
         Check(searches > 0 && reply.Contains("http") && reply.Contains("Kyutai", StringComparison.OrdinalIgnoreCase), "local model searches, reads the excerpts and answers with a source");
+        List<string> opened = new List<string>();
+        hands.GetField("Run", members).SetValue(null, new Action<string>(url => opened.Add(url)));
+        object next = Activator.CreateInstance(brain, true);
+        brain.GetField("Model", members).SetValue(next, args[2]);
+        act.SetValue(next, hands.GetMethod("Do", members).CreateDelegate(act.FieldType));
+        string followed = (string)Call(brain, next, "Ask", "Find the official Pocket TTS GitHub repo and open it.");
+        Console.WriteLine("Local model chained answer: " + followed);
+        Check(opened.Count == 1 && opened[0].TrimEnd('/') == "https://github.com/kyutai-labs/pocket-tts", "local model searches then selects and opens the actual official result without a real browser launch");
     }
 }
-Console.WriteLine(checks + " web search checks passed.");
+Console.WriteLine((checks + chained) + " web search and chain checks passed.");
