@@ -42,6 +42,9 @@ namespace CapriDesktop
         private readonly List<string> voiceAsked = new List<string>();
         private readonly List<byte[]> spoken = new List<byte[]>();
         private readonly List<string> speechAsked = new List<string>();
+        private int pocketStage;
+        private byte[] pocketWave;
+        private bool pocketTextFirst;
 
         private bool blinked;
         private bool slept;
@@ -113,6 +116,26 @@ namespace CapriDesktop
         {
             Ledge seat = pet.Seat;
             return seat != null && pet.Hip.Y == seat.Y;
+        }
+
+        private void ToggleSpeech()
+        {
+            foreach (object root in pet.ContextMenu.Items)
+            {
+                if (!(root is MenuItem settings) || (string)settings.Header != "Settings") continue;
+                foreach (object child in settings.Items)
+                {
+                    if (!(child is MenuItem voice) || (string)voice.Header != "Voice") continue;
+                    foreach (object option in voice.Items)
+                    {
+                        if (!(option is MenuItem replies) || (string)replies.Header != "Speak replies") continue;
+                        if (!replies.IsEnabled) throw new Exception("Speak replies was disabled with a voice selected.");
+                        replies.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+                        return;
+                    }
+                }
+            }
+            throw new Exception("Speak replies is missing from Settings > Voice.");
         }
 
         private bool Step(double now)
@@ -614,6 +637,18 @@ namespace CapriDesktop
                 pet.SetStay(false);
                 hopsEnd = hopsEnd && stayed;
                 File.WriteAllText(Path.Combine(folder, "brain-key"), "nvapi-smoke-1234");
+                Brain.WorkGateway = "http://127.0.0.1:19001/v1";
+                Brain.GatewayKeyPrefix = "private_test_";
+                pet.SaveBrainKey("private_test_smoke-only-not-a-real-key");
+                pet.ShowBrains(null);
+                if (Cloud.KindOf("private_test_smoke-only-not-a-real-key") != "work" || pet.Brain.Remote.Kind != "work" || pet.Saved.CloudModel != Brain.GatewayDefault
+                    || pet.BrainMenu.IndexOf("*Gateway default", StringComparison.Ordinal) < 0 || pet.BrainMenu.IndexOf("Set gateway model...", StringComparison.Ordinal) < 0
+                    || pet.BrainMenu.IndexOf("Replace gateway key...", StringComparison.Ordinal) < 0 || !File.Exists(Path.Combine(folder, "brain-key"))) throw new Exception("The work gateway key wasn't saved or offered its model and replacement choices.");
+                pet.PickCloud("work/claude-model");
+                pet.SaveBrainKey("private_test_replacement-smoke-only");
+                pet.ShowBrains(null);
+                if (pet.Brain.Remote.Model != "work/claude-model" || pet.Saved.CloudModel != "work/claude-model" || pet.BrainMenu.IndexOf("*work/claude-model", StringComparison.Ordinal) < 0) throw new Exception("Replacing a work key lost its model.");
+                checks.Add("PASS work gateway: private_test_ keys save without model discovery, default and explicit models show in Brain, and replacing a key preserves the model");
                 pet.ForgetBrainKey();
                 bool cloudGone = pet.Brain.Remote == null && pet.Saved.CloudModel == null && !File.Exists(Path.Combine(folder, "brain-key"));
                 pet.Brain.Model = "qwen3:8b";
@@ -693,11 +728,11 @@ namespace CapriDesktop
                 pet.AskNickname();
                 bool askedName = pet.Talk.Typing && pet.Talk.Reply != null && pet.Talk.Reply.StartsWith("What should I call you?", StringComparison.Ordinal);
                 pet.Talk.Submit("  Lachy!!  ");
-                bool namedRight = !pet.Talk.Typing && Brain.Nickname == "Lachy" && pet.Saved.Nickname == "Lachy" && pet.Talk.Reply == "Got it, Lachy." && Brain.Character.IndexOf("call them: Lachy.", StringComparison.Ordinal) >= 0;
+                bool namedRight = !pet.Talk.Typing && Brain.Nickname == "Lachy" && pet.Saved.Nickname == "Lachy" && pet.Talk.Reply == "Got it, Lachy." && Brain.Character.IndexOf("Their preferred nickname is Lachy.", StringComparison.Ordinal) >= 0;
                 pet.SetNickname("shithead");
                 bool rudeName = Brain.Nickname == "shithead" && pet.Saved.Nickname == "shithead" && pet.Talk.Reply == "Got it, shithead.";
                 pet.SetNickname("choom");
-                bool clearedName = Brain.Nickname == null && pet.Saved.Nickname == null && pet.Talk.Reply == "Back to choom, then." && Brain.Character.IndexOf("set a nickname", StringComparison.Ordinal) < 0;
+                bool clearedName = Brain.Nickname == null && pet.Saved.Nickname == null && pet.Talk.Reply == "Back to choom, then." && Brain.Character.IndexOf("Their preferred nickname is", StringComparison.Ordinal) < 0;
                 if (!askedName || !namedRight || !rudeName || !clearedName) throw new Exception("The nickname went wrong: asked " + askedName + ", named " + namedRight + ", rude " + rudeName + ", cleared " + clearedName);
                 checks.Add("PASS nickname: Settings > What should she call you? asks in her typing box, saves a cleaned-up name she says back, rude ones too since it's their call, and choom goes back to choom");
                 pet.Hear("remember I love Hollow Knight");
@@ -845,6 +880,18 @@ namespace CapriDesktop
                 if (!pet.Talk.Pill.GlitchesIn(now)) throw new Exception("The pill didn't glitch in when it showed, or a hover glitched it again.");
                 checks.Add("PASS hover pill: black cut-corner plates with a pink-to-cyan neon edge, TYPE and TALK and a segmented wave like Windows, the mic level and a red MUTED drawn the same, crisp at 100%, 150% and 200% with the same size and hit areas, and a glitch only when it shows");
                 checks.Add("PASS chat: the typing box sends a line to her brain, the reply types out in a bubble above her head");
+                int voiceStarts = 0, voiceEnds = 0;
+                Action voiceStart = delegate { voiceStarts++; }, voiceEnd = delegate { voiceEnds++; };
+                pet.Talk.Pill.VoiceStarted += voiceStart;
+                pet.Talk.Pill.VoiceReleased += voiceEnd;
+                pet.Talk.Pill.BeginVoice();
+                pet.Talk.Pill.BeginVoice();
+                pet.Talk.Pill.EndVoice();
+                pet.Talk.Pill.EndVoice();
+                pet.Talk.Pill.VoiceStarted -= voiceStart;
+                pet.Talk.Pill.VoiceReleased -= voiceEnd;
+                if (voiceStarts != 1 || voiceEnds != 1 || pet.Dictating) throw new Exception("Push-to-talk didn't pair one hold with one release, or a smoke check started the microphone.");
+                checks.Add("PASS push-to-talk: one hold starts once and one release ends once; smoke checks never activate the microphone");
                 // Chinese takes two columns a character and wraps without spaces, a long link breaks across lines, and every
                 // letter still shows once she's done typing.
                 string hanziReply = "你好，朋友！今天过得怎么样？";
@@ -1100,7 +1147,7 @@ namespace CapriDesktop
                 string last = asked.Length == 0 ? "" : asked[asked.Length - 1];
                 if (pet.Talk.Reply != "Key saved. I'll talk as Capri Test. Change it under Settings > Voice." || !File.Exists(keyPath) || File.ReadAllText(keyPath) != "good-key-1234" || !shut || pet.VoiceStatus != "key 1234 | Capri Test | speaking" || voiced != 1 || !last.StartsWith("POST /v1/text-to-speech/v1?", StringComparison.Ordinal) || last.IndexOf(" good-key-1234 ", StringComparison.Ordinal) < 0) throw new Exception("Saving a good ElevenLabs key went wrong: " + pet.Talk.Reply + " | " + pet.VoiceStatus + " | " + voiced + " | " + string.Join(" / ", asked));
                 string voiceMenu = pet.VoiceMenu;
-                if (voiceMenu != "Provider: ElevenLabs | - | *Use ElevenLabs | - | *Capri Test | Adam | - | New key... | Remove key ending 1234") throw new Exception("The Voice menu listed the wrong things: " + voiceMenu);
+                if (voiceMenu != "*Speak replies | - | Use Pocket TTS (local) | Pocket voices (English) | - | Provider: ElevenLabs | - | *Use ElevenLabs | - | *Capri Test | Adam | - | New key... | Remove key ending 1234") throw new Exception("The Voice menu listed the wrong things: " + voiceMenu);
                 checks.Add("PASS voice key: Settings > Voice asks for the key in a hidden box, explains and drops a rejected key, keeps a good one in a private file and picks their own voice first");
                 if (pet.TypingSound) throw new Exception("Typing sound stayed on while her ElevenLabs voice works.");
                 pet.Think = delegate(string words) { return "Preem question, choom."; };
@@ -1116,7 +1163,7 @@ namespace CapriDesktop
                 lock (spoken) voiced = spoken.Count;
                 string last = asked.Length == 0 ? "" : asked[asked.Length - 1];
                 if (pet.Talk.Reply != "Preem question, choom." || voiced != 2 || last.IndexOf("question", StringComparison.Ordinal) < 0 || Math.Abs(pet.Talk.Pace - 22) > 1.5) throw new Exception("Her reply wasn't spoken at the voice's pace: " + pet.Talk.Reply + " | " + voiced + " | " + pet.Talk.Pace + " | " + last);
-                pet.SetSpeak(false);
+                ToggleSpeech();
                 pet.Hear("again");
                 return true;
             }
@@ -1125,10 +1172,74 @@ namespace CapriDesktop
                 if (pet.Talk.Reply == null) return false;
                 int voiced;
                 lock (spoken) voiced = spoken.Count;
-                if (voiced != 2 || pet.VoiceStatus != "key 1234 | Capri Test | quiet" || !pet.TypingSound) throw new Exception("Speak replies off still spoke, or typing stayed off: " + voiced + " | " + pet.VoiceStatus);
-                pet.ForgetVoice();
-                if (File.Exists(Path.Combine(folder, "voice-key")) || pet.VoiceStatus != "no key | v1 | quiet" || pet.VoiceMenu != "Provider: ElevenLabs | - | Add ElevenLabs key...") throw new Exception("Remove key didn't remove it: " + pet.VoiceStatus + " | " + pet.VoiceMenu);
-                checks.Add("PASS voice: replies are spoken through ElevenLabs and type out at the voice's pace, Use ElevenLabs off keeps her quiet, and Remove key deletes the file");
+                if (pocketStage == 0)
+                {
+                    if (voiced != 2 || pet.VoiceStatus != "key 1234 | Capri Test | quiet" || !pet.TypingSound) throw new Exception("Speak replies off still spoke, or typing stayed off: " + voiced + " | " + pet.VoiceStatus);
+                    short[] tone = new short[48000];
+                    for (int i = 0; i < tone.Length; i++) tone[i] = (short)(Math.Sin(i * 0.05) * 3000);
+                    pocketWave = Voice.Wave(tone, 24000);
+                    pet.PocketSynthesize = delegate(string text, string speaker)
+                    {
+                        if (speaker != "cosette" || text != "Preem question, choom.") throw new Exception("Wrong local voice or text.");
+                        Thread.Sleep(9100);
+                        return pocketWave;
+                    };
+                    pet.SetPitch(3);
+                    pet.SetPace(120);
+                    pet.SetRobot(30);
+                    pet.SetGlitch(40);
+                    pet.SetLayers(VoiceFx.Layering.Off.Turned(true));
+                    pet.ChoosePocket("cosette");
+                    pet.Hear("local reply");
+                    pocketStage = 1;
+                    return false;
+                }
+                if (pocketStage == 1)
+                {
+                    if (voiced == 2 && pet.Talk.Reply == "Preem question, choom.") pocketTextFirst = true;
+                    if (voiced < 3) return false;
+                    byte[] expected = VoiceFx.Styled(pocketWave, "Preem question, choom.");
+                    byte[] actual;
+                    lock (spoken) actual = spoken[2];
+                    if (!pocketTextFirst || Convert.ToBase64String(actual) != Convert.ToBase64String(expected) || actual == pocketWave || pet.VoiceStatus != "Pocket TTS | cosette | speaking" || !File.Exists(Path.Combine(folder, "voice-key"))) throw new Exception("Pocket didn't preserve effects, late speech, selection or ElevenLabs key.");
+                    var json = new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(Settings));
+                    using (MemoryStream stream = new MemoryStream())
+                    {
+                        json.WriteObject(stream, pet.Saved);
+                        stream.Position = 0;
+                        Settings loaded = (Settings)json.ReadObject(stream);
+                        if (!loaded.PocketVoice || loaded.PocketSpeaker != "cosette") throw new Exception("Pocket voice selection wasn't saved.");
+                    }
+                    pet.SetPitch(0);
+                    pet.SetPace(100);
+                    pet.SetRobot(0);
+                    pet.SetGlitch(0);
+                    pet.SetLayers(VoiceFx.Layering.Off);
+                    pet.ChooseVoice("v1");
+                    if (pet.VoiceStatus != "key 1234 | Capri Test | speaking") throw new Exception("Couldn't switch back to ElevenLabs.");
+                    pet.ChoosePocket("alba");
+                    pet.ForgetVoice();
+                    pet.PocketSynthesize = delegate { return pocketWave; };
+                    pet.HearStyle();
+                    pocketStage = 2;
+                    return false;
+                }
+                if (voiced < 4) return false;
+                if (pocketStage == 2)
+                {
+                    ToggleSpeech();
+                    pet.Hear("text only");
+                    pocketStage = 3;
+                    return false;
+                }
+                if (voiced != 4 || pet.Talk.Reply != "Preem question, choom.") throw new Exception("Muted Pocket replies weren't text only.");
+                if (File.Exists(Path.Combine(folder, "voice-key")) || pet.VoiceStatus != "Pocket TTS | alba | quiet" || pet.VoiceMenu != "Speak replies | - | *Use Pocket TTS (local) | Pocket voices (English) | - | Provider: Pocket TTS | - | Add ElevenLabs key...") throw new Exception("Pocket required an ElevenLabs key or couldn't be muted: " + pet.VoiceStatus + " | " + pet.VoiceMenu);
+                ToggleSpeech();
+                if (pet.VoiceStatus != "Pocket TTS | alba | speaking" || !pet.VoiceMenu.StartsWith("*Speak replies |", StringComparison.Ordinal)) throw new Exception("Unmuting lost the saved voice or menu state.");
+                ToggleSpeech();
+                checks.Add("PASS Speak replies: menu toggle mutes ElevenLabs and Pocket replies to text only and restores the selected voice");
+                checks.Add("PASS voice: ElevenLabs replies, muting, switching providers and removing its key");
+                checks.Add("PASS Pocket TTS: independent of ElevenLabs key, saved speaker, all effects and layers, preview and speech arriving after the text fallback");
                 fakeVoice.Stop();
                 Send(shelf, "quit");
                 pet.Talk.Dismiss();
@@ -1504,7 +1615,7 @@ namespace CapriDesktop
             Voice.Host = hostWas;
             fail("ElevenLabs still asks with its own key", Voice.Seconds(elevenSaid) > 0.99 && elevenAsked.StartsWith("POST /v1/text-to-speech/v1?output_format=wav_24000 good-key-1234 {\"text\":\"Hey chewm.\",\"model_id\":\"eleven_v4_turbo\"}", StringComparison.Ordinal));
             pet.SetVoiceProvider(Speakers.Local);
-            fail("an unset address is Kokoro's usual one", pet.Speaks && pet.VoiceStatus == "local localhost:8880 | server's voice | speaking" && pet.VoiceMenu == "Provider: Local server | - | *Speak replies | - | Server: " + LocalSpeaker.Default + " (Kokoro's usual)... | Model: server's default... | Voice: server's default... | Format: WAV | - | Test voice");
+            fail("an unset address is Kokoro's usual one", pet.Speaks && pet.VoiceStatus == "local localhost:8880 | server's voice | speaking" && pet.VoiceMenu == "*Speak replies | - | Use Pocket TTS (local) | Pocket voices (English) | - | Provider: Local server | - | Server: " + LocalSpeaker.Default + " (Kokoro's usual)... | Model: server's default... | Voice: server's default... | Format: WAV | - | Test voice");
             fail("a bad address isn't kept", !pet.SetLocalVoice("url", "ftp://nope") && pet.VoiceStatus.StartsWith("local localhost:8880", StringComparison.Ordinal));
             TcpListener server = new TcpListener(IPAddress.Loopback, 0);
             server.Start();
@@ -1528,7 +1639,7 @@ namespace CapriDesktop
             pet.SetLocalVoice("url", url);
             pet.SetLocalVoice("model", "kokoro");
             pet.SetLocalVoice("voice", "tone");
-            fail("a set local server speaks", pet.Speaks && pet.Speaker.Name == "Local server" && pet.VoiceStatus == "local " + url + " | tone | speaking" && pet.VoiceMenu == "Provider: Local server | - | *Speak replies | - | Server: " + url + "... | Model: kokoro... | Voice: tone... | Format: WAV | - | Test voice");
+            fail("a set local server speaks", pet.Speaks && pet.Speaker.Name == "Local server" && pet.VoiceStatus == "local " + url + " | tone | speaking" && pet.VoiceMenu == "*Speak replies | - | Use Pocket TTS (local) | Pocket voices (English) | - | Provider: Local server | - | Server: " + url + "... | Model: kokoro... | Voice: tone... | Format: WAV | - | Test voice");
             Func<string, string> problem = delegate(string text)
             {
                 try { pet.Speaker.Speak(text); return null; }
@@ -1588,9 +1699,9 @@ namespace CapriDesktop
             fail("Speak replies off quiets it", !pet.Speaks && pet.VoiceStatus.EndsWith("| quiet", StringComparison.Ordinal));
             pet.SetSpeak(true);
             pet.SetVoiceProvider(Speakers.Off);
-            fail("Off", !pet.Speaks && pet.VoiceStatus == "off | no voice | quiet" && pet.VoiceMenu == "Provider: Off | - | No voice provider. She types her replies. (off)" && pet.Speaker.Name == "none");
+            fail("Off", !pet.Speaks && pet.VoiceStatus == "off | no voice | quiet" && pet.VoiceMenu == "Speak replies (off) | - | Use Pocket TTS (local) | Pocket voices (English) | - | Provider: Off | - | No voice provider. She types her replies. (off)" && pet.Speaker.Name == "none");
             pet.SetVoiceProvider(Speakers.ElevenLabs);
-            fail("back to ElevenLabs", pet.VoiceStatus == "no key | no voice | quiet" && pet.VoiceMenu == "Provider: ElevenLabs | - | Add ElevenLabs key...");
+            fail("back to ElevenLabs", pet.VoiceStatus == "no key | no voice | quiet" && pet.VoiceMenu == "Speak replies (off) | - | Use Pocket TTS (local) | Pocket voices (English) | - | Provider: ElevenLabs | - | Add ElevenLabs key...");
             pet.SetLocalVoice("url", "");
             pet.SetLocalVoice("model", "");
             pet.SetLocalVoice("voice", "");

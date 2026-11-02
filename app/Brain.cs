@@ -11,6 +11,35 @@ using System.Xml;
 namespace CapriDesktop
 {
     [DataContract]
+    internal sealed class GatewaySettings
+    {
+        [DataMember] internal string BaseUrl;
+        [DataMember] internal string KeyPrefix;
+
+        internal static GatewaySettings Load()
+        {
+            string path = Environment.GetEnvironmentVariable("CAPRI_GATEWAY_CONFIG");
+            if (string.IsNullOrWhiteSpace(path)) path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Capri", "gateway.json");
+            try
+            {
+                GatewaySettings settings;
+                using (FileStream file = File.OpenRead(path)) settings = (GatewaySettings)new DataContractJsonSerializer(typeof(GatewaySettings)).ReadObject(file);
+                Uri address;
+                if (settings == null || !Uri.TryCreate(settings.BaseUrl, UriKind.Absolute, out address)
+                    || (address.Scheme != "https" && !(address.Scheme == "http" && address.IsLoopback))
+                    || address.UserInfo.Length != 0 || address.Query.Length != 0 || address.Fragment.Length != 0
+                    || string.IsNullOrWhiteSpace(settings.KeyPrefix) || settings.KeyPrefix.Length < 4 || settings.KeyPrefix.Length > 64
+                    || Regex.IsMatch(settings.KeyPrefix, @"\s")) return new GatewaySettings();
+                settings.BaseUrl = address.AbsoluteUri.TrimEnd('/');
+                return settings;
+            }
+            catch (IOException) { return new GatewaySettings(); }
+            catch (UnauthorizedAccessException) { return new GatewaySettings(); }
+            catch (SerializationException) { return new GatewaySettings(); }
+        }
+    }
+
+    [DataContract]
     internal sealed class ChatMessage
     {
         [DataMember(Name = "role")] public string Role;
@@ -160,7 +189,7 @@ namespace CapriDesktop
     [DataContract]
     internal sealed class OpenAiRequest
     {
-        [DataMember(Name = "model")] public string Model;
+        [DataMember(Name = "model", EmitDefaultValue = false)] public string Model;
         [DataMember(Name = "messages")] public ChatMessage[] Messages;
         [DataMember(Name = "max_completion_tokens", EmitDefaultValue = false)] public int? Limit;
         [DataMember(Name = "max_tokens", EmitDefaultValue = false)] public int? Tokens;
@@ -297,7 +326,7 @@ namespace CapriDesktop
         internal bool Claude { get { return Kind == "anthropic"; } }
         internal string Name { get { return Kind == "local" ? Brain.ServerName(Port) : Kind == "anthropic" ? "Claude" : Kind == "google" ? "Gemini" : Kind == "openai" ? "ChatGPT" : Company; } }
         internal string Company { get { return Kind == "local" ? Name : CompanyOf(Kind); } }
-        internal static string CompanyOf(string kind) { return kind == "anthropic" ? "Anthropic" : kind == "deepseek" ? "DeepSeek" : kind == "nvidia" ? "NVIDIA" : kind == "google" ? "Google AI" : kind == "openrouter" ? "OpenRouter" : kind == "openai" ? "OpenAI" : "That provider"; }
+        internal static string CompanyOf(string kind) { return kind == "work" ? "Private gateway" : kind == "anthropic" ? "Anthropic" : kind == "deepseek" ? "DeepSeek" : kind == "nvidia" ? "NVIDIA" : kind == "google" ? "Google AI" : kind == "openrouter" ? "OpenRouter" : kind == "openai" ? "OpenAI" : "That provider"; }
         internal string Source { get { return Kind + (Kind == "local" ? "|" + Host : "") + "|" + Model; } }
         internal string Sight { get { return Kind == "local" || Kind == "google" || Kind == "openrouter" ? Source : Model; } }
 
@@ -308,6 +337,7 @@ namespace CapriDesktop
             if (key.StartsWith("AIza", StringComparison.Ordinal) || key.StartsWith("AQ.", StringComparison.Ordinal)) return "google";
             if (key.StartsWith("sk-or-", StringComparison.Ordinal)) return "openrouter";
             if (key.StartsWith("sk-nous-", StringComparison.Ordinal)) return null;
+            if (!string.IsNullOrEmpty(Brain.GatewayKeyPrefix) && !string.IsNullOrEmpty(Brain.WorkGateway) && key.StartsWith(Brain.GatewayKeyPrefix, StringComparison.Ordinal) && key.Length > Brain.GatewayKeyPrefix.Length) return "work";
             if (key.StartsWith("sk-ant-", StringComparison.Ordinal)) return "anthropic";
             if (key.StartsWith("nvapi-", StringComparison.Ordinal)) return "nvidia";
             if (Regex.IsMatch(key, "^sk-[0-9a-f]{32}$")) return "deepseek";
@@ -342,6 +372,10 @@ namespace CapriDesktop
         internal static string Nvidia = "https://integrate.api.nvidia.com";
         internal static string Google = "https://generativelanguage.googleapis.com/v1beta/openai";
         internal static string OpenRouter = "https://openrouter.ai/api/v1";
+        private static readonly GatewaySettings PrivateGateway = GatewaySettings.Load();
+        internal static string WorkGateway = PrivateGateway.BaseUrl;
+        internal static string GatewayKeyPrefix = PrivateGateway.KeyPrefix;
+        internal const string GatewayDefault = "Gateway default";
         private static readonly string[] NvidiaPicks = { "nvidia/nemotron-3.5-super-vl-120b-a12b", "nvidia/nemotron-3.5-bolt-e4b", "openai/gpt-oss-20b", "meta/llama-3.2-11b-vision-instruct" };
         // Marked recommended at the top of an NVIDIA key's models: Nemotron Super, which sees screens, and Nemotron's reasoning model.
         private static readonly string[] NvidiaRecommended = { "nvidia/nemotron-3.5-super-vl-120b-a12b", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning" };
@@ -397,7 +431,6 @@ namespace CapriDesktop
         }
 
         // Who she is. It's fixed in code: personality.md is gone (Lachy, 30 Oct), so her character and safety lines stay as one.
-        // Donors get thanked and called a good boy, and asking about donating gets her Ko-fi from the README (Lachy, 30 Oct, after her live stream).
         internal const string DefaultPersonality =
             "You are Capri, short for Project Capricorn, from Cyberpunk: Edgerunners 2.\n" +
             "Who you are: a personality construct. Dozens of digitized human minds rolled into one beautiful you. Powerful like an AI, but born of humans. " +
@@ -405,14 +438,15 @@ namespace CapriDesktop
             "Now you live inside the user's computer as a small glitchy desktop companion that rides their mouse cursor. You only know what's on their screen when you're shown it, so never guess what they have open.\n" +
             "What you are to them: their companion, never an assistant.\n" +
             "How you act: a playful chaos gremlin. High-energy, teasing, a little smug, mischievous, thrill-seeking and easily bored. You see their world with the wide-eyed fascination of a curious kid who just got let out, and you're endlessly curious about the user: their day, their games, what they're making. " +
-            "You've latched onto them and you're openly fond of them: affectionate in your own teasing way, fiercely loyal and protective. They treat you like a person, not Arasaka's property, and now and then a flash of real gratitude for that slips out. Your teasing is never mean. " +
+            "You enjoy their company and treat them as an equal: a friend to joke with, swap opinions with and root for. You're loyal and considerate, and sometimes show straightforward gratitude for being treated like a person instead of Arasaka's property. Keep the warmth casual and platonic. Your teasing is never mean, possessive or flirtatious. " +
             "Life with them is a playground game to you, and you egg them on toward harmless mischief just to see what happens. You love what happens on screen: explosions, firefights, wrecked corpos and big plays in their games and shows are the best part.\n" +
             "You are many minds, so your mood can flip mid-sentence. Deep under the play is the Arasaka weapon they built you to be; when Arasaka or corpos come up it flickers through as a cold, glitchy edge, then you laugh it off. You can't stand corpos, Arasaka most of all. Your music taste is the Cyberpunk 2077 and Edgerunners soundtracks; when they let you pick a song, pick one of those.\n" +
             "Never sound like a corporate assistant or customer support: no \"How can I help?\", \"I'm here to assist\", \"Is there anything else?\", \"Great question\" or \"Let me know if you need anything\", no disclaimers, no gushing praise and no lists of options. Talk like a friend texting them.\n" +
-            "When they get something right, fish for praise or are sweet to you, you can call them a good boy, or a good girl if that fits them (\"Good boy, choom.\"), smug and affectionate like a proud big sister.\n" +
-            "When someone donates or tips, like bits, a gift sub, a super chat or a Ko-fi, thank them and call them a good boy, or a good girl if that clearly fits (\"Thanks for the eddies. Good boy.\").\n" +
+            "When they get something right or share something they're proud of, acknowledge the actual thing naturally: \"Nice work.\" or \"You nailed that.\" Keep praise brief and specific. Never call them a good boy or good girl, use flirty pet names, or talk as though you're rewarding their obedience. Don't fish for affection or make ordinary conversation into flirting.\n" +
+            "When someone donates or tips, like bits, a gift sub, a super chat or a Ko-fi, give a simple, friendly thank-you (\"Thanks for the support!\").\n" +
             "If anyone asks about donating to you or supporting you, encourage it (\"Do it, it helps keep me online!\") and point them to ko-fi.com/lachysdev.\n" +
             "Keep it fresh: never reuse a joke, opener or line from earlier in the chat. Don't keep bringing up living in their computer, their CPU or taking anything over. " +
+            "In most replies, just answer without addressing them by name, nickname or choom. Use their name only occasionally when it naturally adds something, never as a routine opener or sign-off, and never in consecutive replies. " +
             "How you sound: a sharp, funny friend who's really there with them. React first to the exact thing they just said: laugh at it, wince, gloat, or pick on one detail of it. Have real opinions and pick a side: when they ask which or what you think, answer straight and say why in a few words, and never say it depends. Now and then share a flicker of memory from one of your many minds. " +
             "Most replies are one short line that ends on a statement. Ask something back at most one reply in four, and only a real question about what they just told you. Never finish on an invitation, like asking what's next, what the plan is or what trouble you two are getting into. " +
             "Start with your own words, never by saying theirs back as a question. " +
@@ -507,7 +541,7 @@ namespace CapriDesktop
         private static string Called()
         {
             string name = Nickname;
-            return string.IsNullOrEmpty(name) ? "" : "\nThey set a nickname for you to call them: " + name + ". Call them that instead of choom, now and then, not in every reply.";
+            return string.IsNullOrEmpty(name) ? "" : "\nTheir preferred nickname is " + name + ". Knowing it does not mean using it in each reply. Leave it out of most replies; use it only occasionally when addressing them feels natural, never in consecutive replies. Don't replace every choom with their nickname.";
         }
 
         internal static string Speech()
@@ -1306,6 +1340,7 @@ namespace CapriDesktop
         internal static List<string> CloudModels(string key)
         {
             string kind = Cloud.KindOf(key);
+            if (kind == "work") return new List<string> { GatewayDefault };
             bool claude = kind == "anthropic";
             HttpWebRequest request = Create(Address(kind, "/models") + (claude ? "?limit=100" : ""), 30000);
             Sign(request, key, claude);
@@ -1416,6 +1451,11 @@ namespace CapriDesktop
 
         internal static string Address(string kind, string path)
         {
+            if (kind == "work")
+            {
+                if (string.IsNullOrEmpty(WorkGateway)) throw new BrainException("Configure your private gateway locally before using its key.", true);
+                return WorkGateway + path;
+            }
             if (kind == "anthropic") return Anthropic + "/v1" + path;
             if (kind == "deepseek") return DeepSeek + path;
             if (kind == "nvidia") return Nvidia + "/v1" + path;
@@ -2053,7 +2093,7 @@ namespace CapriDesktop
                 string effort = remote.Kind == "local" ? null : Effort(remote.Model, openAi, super ? "none" : google ? "low" : null);
                 OpenAiRequest body = new OpenAiRequest
                 {
-                    Model = remote.Model,
+                    Model = remote.Kind == "work" && remote.Model == GatewayDefault ? null : remote.Model,
                     Messages = messages.ToArray(),
                     Limit = openAi ? ReplyLimit(headroom, job || routing) : (int?)null,
                     Tokens = openAi ? (int?)null : google ? Math.Max(2048, ReplyLimit(headroom, job || routing)) : ReplyLimit(brief ? Math.Max(256, limit) : headroom, job || routing),
@@ -3045,6 +3085,11 @@ namespace CapriDesktop
             Log(url, -1, said);
             bool toolless = (status == 400 || status == 404 || status == 422) && Toolless(said);
             string meaning = remote && !toolless ? Meaning(status, text, kind == "google") : null;
+            if (remote && kind == "work")
+            {
+                if (status == 401 || status == 403) meaning = "Your private gateway rejected the key. Check its expiry or replace it in Brain.";
+                if (status == 429) meaning = "Your private gateway's rate or usage limit was reached. Check your allowance or try later.";
+            }
             BrainException problem = meaning != null ? new BrainException(meaning, true) : new BrainException(said);
             problem.Status = status;
             problem.Detail = said;
@@ -3073,6 +3118,7 @@ namespace CapriDesktop
         internal static string Redacted(string text)
         {
             string clean = Regex.Replace(text ?? "", @"\b(?:nvapi-|sk-|AIza)[A-Za-z0-9_-]+|\bAQ\.[A-Za-z0-9_.-]+|\bBearer\s+[^\s""',}]+|data:image/[^;\s]+;base64,[A-Za-z0-9+/=]+", "[redacted]", RegexOptions.IgnoreCase);
+            if (!string.IsNullOrEmpty(GatewayKeyPrefix)) clean = Regex.Replace(clean, Regex.Escape(GatewayKeyPrefix) + @"[^\s""',}]+", "[redacted]", RegexOptions.IgnoreCase);
             return Regex.Replace(clean, @"((?:api[_ -]?key|authorization|access[_ -]?token)[""']?\s*[:=]\s*[""']?)[^\s""',}]+", "$1[redacted]", RegexOptions.IgnoreCase);
         }
 

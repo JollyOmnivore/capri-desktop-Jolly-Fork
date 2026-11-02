@@ -709,6 +709,9 @@ namespace CapriDesktop
         internal const double Tall = 40;
         internal event Action Typing;
         internal event Action Voice;
+        internal event Action VoiceStarted;
+        internal event Action VoiceReleased;
+        private bool voiceHeld;
         private static readonly Random random = new Random();
         private readonly PillFace face = new PillFace();
         private double shown = -1;
@@ -721,8 +724,26 @@ namespace CapriDesktop
             Content = face;
             face.PointerMoved += delegate(object sender, PointerEventArgs e) { Hover(Part(e.GetPosition(face).X)); };
             face.PointerExited += delegate { Hover(0); };
-            face.PointerReleased += delegate(object sender, PointerReleasedEventArgs e) { if (e.InitialPressMouseButton == MouseButton.Left) Press(Part(e.GetPosition(face).X)); };
+            ToolTip.SetTip(face, OperatingSystem.IsMacOS() ? "TYPE a message, or hold TALK to speak. Release to send. Transcription stays on this Mac." : "Type to Capri");
+            face.PointerPressed += delegate(object sender, PointerPressedEventArgs e)
+            {
+                if (!e.GetCurrentPoint(face).Properties.IsLeftButtonPressed || Part(e.GetPosition(face).X) != 2) return;
+                e.Pointer.Capture(face);
+                BeginVoice();
+                e.Handled = true;
+            };
+            face.PointerReleased += delegate(object sender, PointerReleasedEventArgs e)
+            {
+                if (e.InitialPressMouseButton != MouseButton.Left) return;
+                if (voiceHeld) { EndVoice(); e.Pointer.Capture(null); }
+                else Press(Part(e.GetPosition(face).X));
+            };
+            face.PointerCaptureLost += delegate { EndVoice(); };
         }
+
+        internal void BeginVoice() { if (voiceHeld) return; voiceHeld = true; if (VoiceStarted != null) VoiceStarted(); }
+        internal void EndVoice() { if (!voiceHeld) return; voiceHeld = false; if (VoiceReleased != null) VoiceReleased(); }
+        internal bool Listening { set { face.Chatting = value; face.Level = value ? 3 : 0; face.InvalidateVisual(); } }
 
         internal bool Over { get { return face.IsPointerOver; } }
 
@@ -825,6 +846,8 @@ namespace CapriDesktop
             };
             Pill.Typing += delegate { if (Typer.IsVisible) Typer.Hide(); else Open(); };
             Pill.Voice += delegate { pet.NoVoice(); };
+            Pill.VoiceStarted += delegate { pet.StartPushToTalk(); };
+            Pill.VoiceReleased += delegate { pet.StopPushToTalk(); };
             Bubble.Dismissed += delegate { if (leaving < 0) leaving = pet.Now; };
         }
 
@@ -833,7 +856,7 @@ namespace CapriDesktop
         internal string Shown { get { return reply == null ? "" : reply.Substring(0, Math.Min(reply.Length, Math.Max(0, Bubble.Sheet.Revealed))); } }
         internal bool Typing { get { return Typer.IsVisible; } }
         internal bool Done { get { return reply != null && replyDone >= 0; } }
-        internal bool Quiet { get { return reply == null && !thinking && !Typer.IsVisible; } }
+        internal bool Quiet { get { return reply == null && !thinking && !Typer.IsVisible && !pet.Dictating; } }
         internal Control Face { get { return Bubble.Sheet; } }
 
         internal void Open()
@@ -936,7 +959,7 @@ namespace CapriDesktop
             {
                 sheet.Revealed = Math.Min(reply.Length, (int)((now - replyStart) * pace));
                 if (sheet.Revealed >= reply.Length && replyDone < 0) replyDone = now;
-                if (replyDone >= 0 && leaving < 0 && !Typer.IsVisible && now > replyDone + Hold(reply.Length, pet.BubbleTime)) leaving = now;
+                if (replyDone >= 0 && leaving < 0 && !Typer.IsVisible && !pet.Dictating && now > replyDone + Hold(reply.Length, pet.BubbleTime)) leaving = now;
             }
             double glitch = 0;
             if (opened >= 0 && now - opened < 0.2) glitch = 1 - (now - opened) / 0.2;
@@ -954,7 +977,7 @@ namespace CapriDesktop
         private void UpdatePill(double now)
         {
             bool allowed = !pet.Busy;
-            if (allowed && (pet.Hovered || (Pill.IsVisible && Pill.Over) || Typer.IsVisible || reply != null || thinking)) pillUntil = Math.Max(pillUntil, now + 1.5);
+            if (allowed && (pet.Hovered || (Pill.IsVisible && Pill.Over) || Typer.IsVisible || reply != null || thinking || pet.Dictating)) pillUntil = Math.Max(pillUntil, now + 1.5);
             if (!allowed || now > pillUntil) { if (Pill.IsVisible) Pill.Hide(); return; }
             double scale = pet.DesktopScaling;
             PixelPoint feet = pet.FeetPoint;

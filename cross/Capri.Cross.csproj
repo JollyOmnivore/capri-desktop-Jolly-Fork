@@ -17,6 +17,8 @@
     <PackageReference Include="Avalonia" Version="11.3.22" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.22" />
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../app/Brain.cs" Link="Shared/Brain.cs" />
@@ -30,4 +32,15 @@
     <EmbeddedResource Include="../assets/chip.png" LogicalName="Capri.Chip.png" />
     <AvaloniaResource Include="../assets/fonts/ShareTechMono-Regular.ttf" Link="Assets/ShareTechMono-Regular.ttf" />
   </ItemGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <MicrophoneTarget>x86_64-apple-macosx15.0</MicrophoneTarget>
+    <MicrophoneTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64' Or ('$(RuntimeIdentifier)' == '' And '$(NETCoreSdkRuntimeIdentifier)' == 'osx-arm64')">arm64-apple-macosx15.0</MicrophoneTarget>
+  </PropertyGroup>
+  <Target Name="BuildMicrophoneHelper" BeforeTargets="PrepareForBuild" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <Exec Command="xcrun swiftc -O -target $(MicrophoneTarget) -module-cache-path &quot;$(IntermediateOutputPath)swift-cache&quot; &quot;$(MSBuildProjectDirectory)/mac/Microphone.swift&quot; -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker &quot;$(MSBuildProjectDirectory)/mac/Microphone.plist&quot; -o &quot;$(IntermediateOutputPath)capri-mic&quot;" />
+    <ItemGroup>
+      <Content Include="$(IntermediateOutputPath)capri-mic" Link="capri-mic" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 </Project>

@@ -1,0 +1,4 @@
+{
+  "BaseUrl": "https://gateway.example.invalid/v1",
+  "KeyPrefix": "private_"
+}

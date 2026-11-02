@@ -26,5 +26,7 @@
   <true/>
   <key>NSAppleEventsUsageDescription</key>
   <string>Capri plays, pauses and skips songs in Spotify or Music when you ask her to.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Capri records while you hold TALK, transcribes on this Mac, and deletes the recording.</string>
 </dict>
 </plist>

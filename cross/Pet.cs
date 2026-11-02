@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Threading;
+using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -34,6 +35,8 @@ namespace CapriDesktop
         [DataMember] internal int? Sounds;
         [DataMember] internal string VoiceId;
         [DataMember] internal bool Silent;
+        [DataMember] internal bool PocketVoice;
+        [DataMember] internal string PocketSpeaker;
         [DataMember] internal int Typing;
         [DataMember] internal bool NoDiscord;
         [DataMember] internal string CloudModel;
@@ -183,7 +186,7 @@ namespace CapriDesktop
         internal const string NoOllama = "Ollama isn't running. Install it from ollama.com and open it.";
         private const string FreeKeyPage = "https://build.nvidia.com/settings/api-keys";
         internal const string KeyChoice = "Use an API key...";
-        internal const string NotAKey = "That doesn't look like an NVIDIA, OpenAI, Claude or DeepSeek key. NVIDIA's start with nvapi-.";
+        internal const string NotAKey = "That doesn't look like a supported API key. For a private gateway, configure its address and key prefix in your local gateway settings first.";
         internal const string FreeKeySteps = "Make a key on NVIDIA's page and copy it. Then right-click me > Brain > " + KeyChoice + " and paste it.";
         internal const string DiscordPage = "https://discord.gg/F4fDHfGtFk";
         internal const string HelpPage = "https://lachydotmcg.github.io/capri-desktop/help/";
@@ -259,6 +262,8 @@ namespace CapriDesktop
         private readonly LocalSpeaker localVoice = new LocalSpeaker();
         private readonly QuietSpeaker noVoice = new QuietSpeaker();
         private ISpeaker elevenLabs;
+        private readonly PocketVoice pocket;
+        internal Func<string, string, byte[]> PocketSynthesize;
         private VoiceListing voices;
         private string voiceProblem;
         private bool listing;
@@ -453,6 +458,8 @@ namespace CapriDesktop
         {
             this.desktop = desktop;
             folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Capri");
+            pocket = new PocketVoice(Program.Smoke ?? folder);
+            PocketSynthesize = pocket.Speak;
             fresh = Program.Smoke == null && !File.Exists(Path.Combine(folder, "cross.json"));
             Saved = Program.Smoke != null ? new Settings() : Load();
             // Security, like Windows: Mac and Linux have the first five toggles' features, and settings from before it get Trusted.
@@ -516,6 +523,8 @@ namespace CapriDesktop
             voice.VoiceId = string.IsNullOrEmpty(Saved.VoiceId) ? null : Saved.VoiceId;
             elevenLabs = new ElevenLabsSpeaker(voice);
             Saved.VoiceProvider = Speakers.Known(Saved.VoiceProvider);
+            if (Saved.PocketVoice) Saved.VoiceProvider = Speakers.Pocket;
+            pocket.Selected = Saved.PocketSpeaker;
             localVoice.Url = Saved.LocalVoiceUrl;
             localVoice.Model = Saved.LocalVoiceModel;
             localVoice.Speaker = Saved.LocalVoiceName;
@@ -570,8 +579,6 @@ namespace CapriDesktop
                 if (Program.Smoke != null) smoke = new Smoke(this, Program.Smoke);
                 else
                 {
-                    int ticket = asking;
-                    DispatcherTimer.RunOnce(() => Greet(ticket, DateTime.Now.Hour), TimeSpan.FromMilliseconds(1800));
                     if (fresh) meetAt = Now + 4;
                 }
             };
@@ -714,10 +721,11 @@ namespace CapriDesktop
         internal void HideAway()
         {
             if (away || quitting) return;
+            CancelPushToTalk();
             // A reply still on its way is dropped and her voice stops, so no bubble turns up with nobody under it to hold up her
             // pop-ins. A job she's doing carries on.
             ++asking;
-            voice.Stop();
+            StopSpeech();
             SetAway(true);
             Talk.Dismiss();
             GlitchOut(delegate { seat = null; walking = false; Hide(); });
@@ -1346,7 +1354,68 @@ namespace CapriDesktop
 
         internal void NoVoice()
         {
-            Talk.Answer("(voice)", "Voice chat isn't on Mac and Linux yet. Type to me for now, choom.");
+            Talk.Answer("(voice)", OperatingSystem.IsMacOS() ? "Hold TALK to speak, then release to send. Whisper transcribes on this Mac; your brain and ElevenLabs handle the reply. The first hold sets up the local model." : "Voice chat isn't on Linux yet. Type to me for now, choom.");
+        }
+
+        private LocalDictation dictation;
+        internal bool Dictating { get { return dictation != null; } }
+
+        internal void StartPushToTalk()
+        {
+            if (!OperatingSystem.IsMacOS() || Program.Smoke != null) { NoVoice(); return; }
+            if (dictation != null || quitting || Talk.Typer.Secret) return;
+            if (Brain.Model == null) { Talk.Answer("(microphone)", "Connect a brain first, then hold TALK to speak."); return; }
+            ComeBack();
+            int ticket = ++asking;
+            Brain.Cancel();
+            StopSpeech();
+            Talk.Dismiss();
+            LocalDictation session = new LocalDictation(folder);
+            dictation = session;
+            bool setup = !session.Installed;
+            Talk.Answer("(microphone)", setup ? "Setting up local speech (148 MB). Hold TALK again when it's ready." : "Starting microphone. Allow Microphone access if macOS asks, then hold TALK again if you already released it.");
+            Action<string> status = delegate(string text)
+            {
+                Dispatcher.UIThread.Post(delegate
+                {
+                    if (dictation != session || ticket != asking || quitting) return;
+                    Talk.Pill.Listening = text.StartsWith("Listening", StringComparison.Ordinal);
+                    Talk.Answer("(microphone)", text);
+                });
+            };
+            ThreadPool.QueueUserWorkItem(async delegate
+            {
+                string text = null, problem = null;
+                try
+                {
+                    if (setup) await session.PrepareAsync(status);
+                    else text = await session.CaptureAsync(Brain.Language, status);
+                }
+                catch (OperationCanceledException) { problem = "Recording stopped. Hold TALK to try again."; }
+                catch (Exception error) { problem = "Local speech: " + error.Message; }
+                Dispatcher.UIThread.Post(delegate
+                {
+                    session.Dispose();
+                    if (dictation != session) return;
+                    dictation = null;
+                    Talk.Pill.Listening = false;
+                    if (ticket != asking || quitting) return;
+                    if (problem != null) Talk.Answer("(microphone)", problem);
+                    else if (setup) Talk.Answer("(microphone)", "Local speech is ready. Hold TALK, speak, then release to send.");
+                    else if (string.IsNullOrWhiteSpace(text)) Talk.Answer("(microphone)", "I didn't catch any speech. Hold TALK and try again.");
+                    else Hear(text, true);
+                });
+            });
+        }
+
+        internal void StopPushToTalk() { if (dictation != null) dictation.Release(); }
+
+        private void CancelPushToTalk()
+        {
+            LocalDictation session = dictation;
+            dictation = null;
+            Talk.Pill.Listening = false;
+            if (session != null) session.Cancel();
         }
 
         internal void Grab()
@@ -1502,6 +1571,12 @@ namespace CapriDesktop
             settings.Items.Add(sounds);
             voiceMenu = new MenuItem { Header = "Voice" };
             settings.Items.Add(voiceMenu);
+            if (OperatingSystem.IsMacOS())
+            {
+                MenuItem microphone = new MenuItem { Header = "How to speak (hold TALK)" };
+                microphone.Click += delegate { NoVoice(); };
+                settings.Items.Add(microphone);
+            }
             MenuItem volume = new MenuItem { Header = "Volume" };
             for (int i = 0; i < Volumes.Length; i++)
             {
@@ -1813,38 +1888,39 @@ namespace CapriDesktop
             Sync();
         }
 
-        // Picking a style: she says a line in it so they hear it, like on Windows. ElevenLabs says the line once per voice; after
-        // that its audio is restyled here, so trying settings spends no more credits.
         internal void HearStyle()
         {
             if (!Speaks)
             {
-                Talk.Answer("(voice check)", Unspoken);
+                Talk.Answer("(voice check)", "Choose Pocket TTS or ElevenLabs under Settings > Voice to hear that, choom.");
                 return;
             }
             int ticket = ++asking;
-            voice.Stop();
-            ISpeaker speaker = Speaker;
-            string id = speaker == elevenLabs ? voice.VoiceId : Saved.VoiceProvider + "\n" + localVoice.Url + "\n" + localVoice.Model + "\n" + localVoice.Speaker + "\n" + localVoice.Format;
+            StopSpeech();
+            string id = SpeechIdentity;
+            Func<string, byte[]> render = SpeechRenderer();
             byte[] said = styleVoice == id ? styleSaid : null;
-            Talk.Thinking("(voice check)");
+            if (Saved.PocketVoice && !pocket.Installed) Talk.Answer("(voice check)", "Setting up Pocket TTS locally. Its first run downloads the speech model and voice; this can take a while.");
+            else Talk.Thinking("(voice check)");
             ThreadPool.QueueUserWorkItem(delegate
             {
                 byte[] wav = null;
                 string problem = null;
                 try
                 {
-                    if (said == null) said = speaker.Speak(StyleLine);
+                    if (ticket != asking) return;
+                    if (said == null) said = render(StyleLine);
                     wav = VoiceFx.Styled(said, StyleLine);
                 }
                 catch (VoiceException error) { problem = Mac(error.Message); }
                 catch (Exception error) { problem = Voice.Short("Voice glitched: " + error.Message); }
                 Dispatcher.UIThread.Post(delegate
                 {
-                    if (said != null) { styleSaid = said; styleVoice = id; }
                     if (ticket != asking) return;
+                    voiceProblem = problem;
+                    if (said != null) { styleSaid = said; styleVoice = id; }
                     double seconds = wav == null ? 0 : Voice.Seconds(wav);
-                    if (seconds < 0.2) { Talk.Answer("(voice check)", problem ?? StyleLine); return; }
+                    if (seconds < 0.2 || !Speaks) { Talk.Answer("(voice check)", problem ?? StyleLine); return; }
                     Talk.Answer("(voice check)", StyleLine, seconds);
                     voice.Play(wav);
                 });
@@ -2203,7 +2279,7 @@ namespace CapriDesktop
             nextPopIn = -1;
             nextGlance = -1;
             ForgetNudges();
-            if (shushed) voice.Stop();
+            if (shushed) StopSpeech();
             Talk.Answer("(quiet)", shushed ? "Going quiet. Right-click me > Quiet when you want me back." : "I'm back, choom.");
             Sync();
             if (ShushChanged != null) ShushChanged();
@@ -2563,9 +2639,15 @@ namespace CapriDesktop
             if (remote == null) return;
             brainMenu.Items.Clear();
             brainMenu.Items.Add(new MenuItem { Header = remote.Name + " key ending " + Voice.Tail(remote.Key), IsEnabled = false });
-            if (cloudModels == null) brainMenu.Items.Add(new MenuItem { Header = "Loading models...", IsEnabled = false });
+            List<string> models = cloudModels;
+            if (remote.Kind == "work")
+            {
+                models = new List<string> { Brain.GatewayDefault };
+                if (remote.Model != Brain.GatewayDefault) models.Add(remote.Model);
+            }
+            if (models == null) brainMenu.Items.Add(new MenuItem { Header = "Loading models...", IsEnabled = false });
             else
-                foreach (string name in cloudModels)
+                foreach (string name in models)
                 {
                     string model = name;
                     MenuItem pick = new MenuItem { Header = Brain.Shown(remote.Kind, model), ToggleType = MenuItemToggleType.Radio, GroupName = "cloud", IsChecked = model == remote.Model };
@@ -2573,6 +2655,15 @@ namespace CapriDesktop
                     brainMenu.Items.Add(pick);
                 }
             brainMenu.Items.Add(new Separator());
+            if (remote.Kind == "work")
+            {
+                MenuItem model = new MenuItem { Header = "Set gateway model..." };
+                model.Click += delegate { AskGatewayModel(remote.Key); };
+                brainMenu.Items.Add(model);
+                MenuItem replace = new MenuItem { Header = "Replace gateway key..." };
+                replace.Click += delegate { AskBrainKey(); };
+                brainMenu.Items.Add(replace);
+            }
             if (remote.Kind == "nvidia")
             {
                 MenuItem stay = new MenuItem { Header = "Stay on my model", ToggleType = MenuItemToggleType.CheckBox, IsChecked = Saved.StayOnModel };
@@ -3177,7 +3268,7 @@ namespace CapriDesktop
 
         private void CheckGlance(double now)
         {
-            if (!Saved.Watch || glancing || Hushed) return;
+            if (!Saved.Watch || glancing || Hushed || Dictating) return;
             if (nextGlance < 0) nextGlance = now + Math.Min(20, GlanceGap);
             if (now < nextGlance || Brain.Model == null || away || dragging || pressed || !Talk.Quiet) return;
             nextGlance = now + GlanceGap * (0.8 + random.NextDouble() * 0.4);
@@ -3352,15 +3443,17 @@ namespace CapriDesktop
             });
         }
 
-        internal void Hear(string text)
+        internal void Hear(string text, bool spoken = false)
         {
             text = (text ?? "").Trim();
             if (text.Length == 0) return;
-            if (text.Length > 240) text = text.Substring(0, 240);
+            CancelPushToTalk();
+            int limit = spoken ? 2000 : 240;
+            if (text.Length > limit) text = text.Substring(0, limit);
             if (meeting.Asking) { Met(text); return; }
             int ticket = ++asking;
             Brain.Cancel();
-            voice.Stop();
+            StopSpeech();
             bool askPlease;
             string heard = text;
             text = Hands.Manners(text, out askPlease);
@@ -3436,11 +3529,48 @@ namespace CapriDesktop
             get
             {
                 string picked = Speakers.Known(Saved.VoiceProvider);
-                return picked == Speakers.Local ? localVoice : picked == Speakers.Off ? (ISpeaker)noVoice : elevenLabs;
+                return picked == Speakers.Pocket ? pocket : picked == Speakers.Local ? localVoice : picked == Speakers.Off ? (ISpeaker)noVoice : elevenLabs;
             }
         }
 
         internal bool Speaks { get { return Speaker.Ready && !Saved.Silent; } }
+
+        private string SpeechIdentity { get { return Saved.PocketVoice ? "pocket:" + PocketVoice.Speaker(Saved.PocketSpeaker) : Saved.VoiceProvider + "\n" + voice.VoiceId + "\n" + localVoice.Url + "\n" + localVoice.Model + "\n" + localVoice.Speaker + "\n" + localVoice.Format; } }
+
+        private Func<string, byte[]> SpeechRenderer()
+        {
+            if (!Saved.PocketVoice) return Speaker.Speak;
+            string speaker = PocketVoice.Speaker(Saved.PocketSpeaker);
+            Func<string, string, byte[]> render = PocketSynthesize;
+            return delegate(string text) { return render(text, speaker); };
+        }
+
+        private void StopSpeech() { voice.Stop(); pocket.Stop(); }
+
+        internal void ChoosePocket(string speaker)
+        {
+            ++asking;
+            StopSpeech();
+            Saved.PocketVoice = true;
+            Saved.VoiceProvider = Speakers.Pocket;
+            pocket.Selected = Saved.PocketSpeaker = PocketVoice.Speaker(speaker);
+            Saved.Silent = false;
+            voiceProblem = null;
+            Save();
+            RefreshVoice();
+        }
+
+        private void ChooseElevenLabs()
+        {
+            ++asking;
+            StopSpeech();
+            Saved.PocketVoice = false;
+            Saved.VoiceProvider = Speakers.ElevenLabs;
+            Saved.Silent = false;
+            voiceProblem = null;
+            Save();
+            RefreshVoice();
+        }
 
         // Why a voice check stays quiet, for the provider they picked.
         private string Unspoken
@@ -3459,6 +3589,7 @@ namespace CapriDesktop
             if (!Speaks || Voice.Spoken(said).Length == 0) { Talk.Answer(heard, said); TypeAlong(said, ticket); return; }
             ISpeaker speaker = Speaker;
             Talk.Thinking(heard);
+            Func<string, byte[]> render = SpeechRenderer();
             bool[] shown = { false };
             DispatcherTimer.RunOnce(delegate
             {
@@ -3471,19 +3602,18 @@ namespace CapriDesktop
             {
                 byte[] wav = null;
                 string problem = null;
-                // Every provider hands back a finished WAV, so her pitch, speed, robot and glitch go on here, like on Windows.
-                try { wav = VoiceFx.Styled(speaker.Speak(said), said); }
+                try { if (ticket != asking) return; wav = VoiceFx.Styled(render(said), said); }
                 catch (VoiceException error) { problem = Mac(error.Message); }
                 catch (Exception error) { problem = Voice.Short("Voice glitched: " + error.Message); }
                 Dispatcher.UIThread.Post(delegate
                 {
+                    if (ticket != asking) return;
                     voiceProblem = problem;
-                    if (ticket != asking || shown[0]) return;
+                    bool alreadyShown = shown[0];
                     shown[0] = true;
                     double seconds = wav == null ? 0 : Voice.Seconds(wav);
-                    Talk.Answer(heard, said, seconds);
-                    if (seconds >= 0.2) voice.Play(wav);
-                    else TypeAlong(said, ticket);
+                    if (seconds >= 0.2 && Speaks) { Talk.Answer(heard, said, seconds); voice.Play(wav); }
+                    else if (!alreadyShown) { Talk.Answer(heard, said); TypeAlong(said, ticket); }
                 });
             });
         }
@@ -3537,7 +3667,7 @@ namespace CapriDesktop
         internal void AskBrainKey()
         {
             ComeBack();
-            Talk.AskKey(BrainKeyHeard, "Paste your NVIDIA, OpenAI, Claude or DeepSeek API key and press Enter. It stays on this computer. A free NVIDIA key works.", SaveBrainKey);
+            Talk.AskKey(BrainKeyHeard, "Paste your cloud API key and press Enter. Private gateway keys use the address in your local gateway settings.", SaveBrainKey);
         }
 
         // A key she checks by reading its models, then thinks with on its best chat model until they pick another under Brain.
@@ -3547,6 +3677,13 @@ namespace CapriDesktop
             if (key.Length == 0) return;
             string kind = Cloud.KindOf(key);
             if (kind == null) { Talk.Answer(BrainKeyHeard, NotAKey); return; }
+            if (kind == "work")
+            {
+                string model = Brain.Remote != null && Brain.Remote.Kind == "work" ? Brain.Remote.Model : Brain.GatewayDefault;
+                SaveGateway(key, model);
+                Talk.Answer(BrainKeyHeard, "Work gateway key saved. I'll check it on your next message. If it needs a model name, use Brain > Set gateway model.");
+                return;
+            }
             int ticket = ++asking;
             Talk.Thinking(BrainKeyHeard);
             ThreadPool.QueueUserWorkItem(delegate
@@ -3567,6 +3704,29 @@ namespace CapriDesktop
                     if (ticket == asking) Talk.Answer(BrainKeyHeard, "Key saved. I'm thinking with " + model + " now. Change it under Brain in my right-click menu.");
                 });
             });
+        }
+
+        private void AskGatewayModel(string key)
+        {
+            ComeBack();
+            Talk.AskFor("(gateway model)", "Enter the exact model ID from your work's gateway and press Enter. Choose Gateway default in Brain to let the gateway pick instead.", delegate(string model)
+            {
+                model = (model ?? "").Trim();
+                if (!Regex.IsMatch(model, @"\A[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}\z"))
+                {
+                    Talk.Answer("(gateway model)", "That model ID doesn't look right. Copy the exact ID from your work's setup instructions.");
+                    return;
+                }
+                SaveGateway(key, model);
+                Talk.Answer("(gateway model)", "Gateway model saved: " + model + ". I'll check it on your next message.");
+            });
+        }
+
+        private void SaveGateway(string key, string model)
+        {
+            ++asking;
+            UseCloud(key, model, new List<string> { model });
+            WriteSecret(BrainKeyFile, key, "work gateway key");
         }
 
         internal void UseCloud(string key, string model, List<string> models)
@@ -3614,7 +3774,7 @@ namespace CapriDesktop
             key = (key ?? "").Trim();
             if (key.Length == 0) return;
             int ticket = ++asking;
-            voice.Stop();
+            StopSpeech();
             Talk.Thinking(KeyHeard);
             ThreadPool.QueueUserWorkItem(delegate
             {
@@ -3626,6 +3786,7 @@ namespace CapriDesktop
                 catch (Exception error) { problem = Voice.Short("Couldn't read your ElevenLabs voices: " + error.Message); }
                 Dispatcher.UIThread.Post(delegate
                 {
+                    if (ticket != asking) return;
                     if (status == 401) { if (ticket == asking) Talk.Answer(KeyHeard, Voice.Unsaved(problem)); return; }
                     voice.Key = key;
                     WriteVoiceKey(key);
@@ -3636,6 +3797,8 @@ namespace CapriDesktop
                         if (found.Voices.Count > 0 && (voice.VoiceId == null || !Lists(found, voice.VoiceId))) voice.VoiceId = found.Voices[0].Id;
                     }
                     Saved.VoiceId = voice.VoiceId;
+                    Saved.PocketVoice = false;
+                    Saved.VoiceProvider = Speakers.ElevenLabs;
                     Saved.Silent = false;
                     Save();
                     if (ticket != asking) return;
@@ -3665,6 +3828,7 @@ namespace CapriDesktop
             {
                 string picked = Speakers.Known(Saved.VoiceProvider);
                 string quiet = Speaks ? "speaking" : "quiet";
+                if (picked == Speakers.Pocket) return "Pocket TTS | " + PocketVoice.Speaker(Saved.PocketSpeaker) + " | " + quiet;
                 if (picked == Speakers.Off) return "off | no voice | " + quiet;
                 if (picked == Speakers.Local) return "local " + LocalWhere + " | " + (string.IsNullOrEmpty(localVoice.Speaker) ? "server's voice" : localVoice.Speaker) + " | " + quiet;
                 return (voice.Key == null ? "no key" : "key " + Voice.Tail(voice.Key)) + " | " + (VoiceName() ?? "no voice") + " | " + quiet;
@@ -3684,7 +3848,9 @@ namespace CapriDesktop
         {
             picked = Speakers.Known(picked);
             if (picked == Saved.VoiceProvider) return;
-            voice.Stop();
+            ++asking;
+            StopSpeech();
+            Saved.PocketVoice = picked == Speakers.Pocket;
             Saved.VoiceProvider = picked;
             voiceProblem = null;
             Save();
@@ -3748,12 +3914,15 @@ namespace CapriDesktop
         internal void SetSpeak(bool on)
         {
             Saved.Silent = !on;
-            if (!on) voice.Stop();
+            if (!on) StopSpeech();
             Save();
+            Sync();
+            RefreshVoice();
         }
 
         internal void ChooseVoice(string id)
         {
+            ChooseElevenLabs();
             voice.VoiceId = id;
             Saved.VoiceId = id;
             Save();
@@ -3761,7 +3930,7 @@ namespace CapriDesktop
 
         internal void ForgetVoice()
         {
-            voice.Stop();
+            StopSpeech();
             voice.Key = null;
             voices = null;
             voiceProblem = null;
@@ -3785,7 +3954,7 @@ namespace CapriDesktop
                     listing = false;
                     if (voice.Key != key) return;
                     if (found != null) voices = found;
-                    voiceProblem = problem;
+                    if (!Saved.PocketVoice) voiceProblem = problem;
                     RefreshVoice();
                 });
             });
@@ -3811,10 +3980,27 @@ namespace CapriDesktop
         {
             if (voiceMenu == null) return;
             voiceMenu.Items.Clear();
+            MenuItem replies = new MenuItem { Header = "Speak replies", ToggleType = MenuItemToggleType.CheckBox, IsChecked = Speaks, IsEnabled = Speaker.Ready };
+            replies.Click += delegate { SetSpeak(Saved.Silent); };
+            voiceMenu.Items.Add(replies);
+            voiceMenu.Items.Add(new Separator());
+            MenuItem local = new MenuItem { Header = "Use Pocket TTS (local)", ToggleType = MenuItemToggleType.Radio, GroupName = "voice-provider", IsChecked = Saved.PocketVoice };
+            local.Click += delegate { ChoosePocket(Saved.PocketSpeaker); HearStyle(); };
+            voiceMenu.Items.Add(local);
+            MenuItem localVoices = new MenuItem { Header = "Pocket voices (English)" };
+            foreach (string name in PocketVoice.Voices)
+            {
+                string speaker = name;
+                MenuItem pick = new MenuItem { Header = char.ToUpperInvariant(name[0]) + name.Substring(1), ToggleType = MenuItemToggleType.Radio, GroupName = "pocket-voice", IsChecked = Saved.PocketVoice && PocketVoice.Speaker(Saved.PocketSpeaker) == name };
+                pick.Click += delegate { ChoosePocket(speaker); HearStyle(); };
+                localVoices.Items.Add(pick);
+            }
+            voiceMenu.Items.Add(localVoices);
+            voiceMenu.Items.Add(new Separator());
             string picked = Speakers.Known(Saved.VoiceProvider);
-            MenuItem provider = new MenuItem { Header = "Provider: " + (picked == Speakers.Local ? localVoice.Name : picked == Speakers.Off ? "Off" : "ElevenLabs") };
-            string[] pickable = { Speakers.ElevenLabs, Speakers.Local, Speakers.Off };
-            string[] pickNames = { "ElevenLabs", localVoice.Name + " (OpenAI speech API)", "Off" };
+            MenuItem provider = new MenuItem { Header = "Provider: " + (picked == Speakers.Pocket ? "Pocket TTS" : picked == Speakers.Local ? localVoice.Name : picked == Speakers.Off ? "Off" : "ElevenLabs") };
+            string[] pickable = { Speakers.ElevenLabs, Speakers.Pocket, Speakers.Local, Speakers.Off };
+            string[] pickNames = { "ElevenLabs", "Pocket TTS (local)", localVoice.Name + " (OpenAI speech API)", "Off" };
             for (int i = 0; i < pickable.Length; i++)
             {
                 string one = pickable[i];
@@ -3839,16 +4025,17 @@ namespace CapriDesktop
                 MenuItem add = new MenuItem { Header = "Add ElevenLabs key..." };
                 add.Click += delegate { AskVoiceKey(); };
                 voiceMenu.Items.Add(add);
+                if (voiceProblem != null) voiceMenu.Items.Add(new MenuItem { Header = voiceProblem, IsEnabled = false });
                 return;
             }
-            MenuItem speak = new MenuItem { Header = "Use ElevenLabs", ToggleType = MenuItemToggleType.CheckBox, IsChecked = Speaks, IsEnabled = voice.VoiceId != null };
-            speak.Click += delegate { SetSpeak(Saved.Silent); };
+            MenuItem speak = new MenuItem { Header = "Use ElevenLabs", ToggleType = MenuItemToggleType.Radio, GroupName = "voice-provider", IsChecked = !Saved.PocketVoice && voice.Ready, IsEnabled = voice.VoiceId != null };
+            speak.Click += delegate { ChooseElevenLabs(); };
             voiceMenu.Items.Add(speak);
             voiceMenu.Items.Add(new Separator());
             if (voices == null)
             {
                 voiceMenu.Items.Add(new MenuItem { Header = "Loading voices...", IsEnabled = false });
-                ListVoices();
+                if (!Saved.PocketVoice) ListVoices();
             }
             else
             {
@@ -3857,7 +4044,7 @@ namespace CapriDesktop
                 {
                     if (shown++ >= 30) break;
                     string id = entry.Id;
-                    MenuItem pick = new MenuItem { Header = string.IsNullOrEmpty(entry.Name) ? id : entry.Name, ToggleType = MenuItemToggleType.Radio, GroupName = "voice", IsChecked = id == voice.VoiceId };
+                    MenuItem pick = new MenuItem { Header = string.IsNullOrEmpty(entry.Name) ? id : entry.Name, ToggleType = MenuItemToggleType.Radio, GroupName = "voice", IsChecked = !Saved.PocketVoice && id == voice.VoiceId };
                     pick.Click += delegate { ChooseVoice(id); };
                     voiceMenu.Items.Add(pick);
                 }
@@ -3875,10 +4062,6 @@ namespace CapriDesktop
 
         private void RefreshLocalVoice()
         {
-            MenuItem speak = new MenuItem { Header = "Speak replies", ToggleType = MenuItemToggleType.CheckBox, IsChecked = Speaks, IsEnabled = localVoice.Ready };
-            speak.Click += delegate { SetSpeak(Saved.Silent); };
-            voiceMenu.Items.Add(speak);
-            voiceMenu.Items.Add(new Separator());
             MenuItem server = new MenuItem { Header = "Server: " + (string.IsNullOrEmpty(localVoice.Url) ? LocalSpeaker.Default + " (Kokoro's usual)" : localVoice.Url) + "..." };
             server.Click += delegate { AskLocalVoice("url"); };
             MenuItem model = new MenuItem { Header = "Model: " + (string.IsNullOrEmpty(localVoice.Model) ? "server's default" : localVoice.Model) + "..." };
@@ -3932,8 +4115,9 @@ namespace CapriDesktop
         {
             if (quitting) return;
             quitting = true;
+            CancelPushToTalk();
             Brain.Cancel();
-            voice.Stop();
+            StopSpeech();
             if (presence != null) presence.Dispose();
             Talk.Dismiss();
             GlitchOut(delegate
@@ -3946,6 +4130,7 @@ namespace CapriDesktop
 
         internal void Finish(int code)
         {
+            CancelPushToTalk();
             frames.Stop();
             Talk.Dismiss();
             desktop.Shutdown(code);

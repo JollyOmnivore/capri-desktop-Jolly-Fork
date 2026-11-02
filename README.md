@@ -89,7 +89,7 @@ Stuck? The [setup guide](https://lachydotmcg.github.io/capri-desktop/setup/) wal
 
 ## Mac and Linux (early preview)
 
-She sits on your windows and chats, talks with an ElevenLabs key, remembers your chats, watches your screen, opens, switches and closes apps and controls your music. The Mainframe, voice chat and jobs with her own cursor are Windows-only for now.
+She sits on your windows and chats, talks with an ElevenLabs key, remembers your chats, watches your screen, opens, switches and closes apps and controls your music. Mac also has push-to-talk with local Whisper transcription. The Mainframe, continuous voice chat and jobs with her own cursor are Windows-only for now.
 
 1. Download [Mac (Apple Silicon)](https://github.com/lachydotmcg/capri-desktop/releases/latest/download/Capri-mac-apple-silicon.zip), [Mac (Intel)](https://github.com/lachydotmcg/capri-desktop/releases/latest/download/Capri-mac-intel.zip) or [Linux](https://github.com/lachydotmcg/capri-desktop/releases/latest/download/Capri-linux-x64.tar.gz)
 2. For her brain, use a free NVIDIA key or your own Gemini, OpenRouter, OpenAI, Claude or DeepSeek key from **Brain** in her right-click menu. Or install [Ollama](https://ollama.com) and run `ollama pull gemma4:e4b`
@@ -102,10 +102,15 @@ She sits on your windows and chats, talks with an ElevenLabs key, remembers your
 
 ## How to use her
 
+Private OpenAI-compatible gateways use local configuration. Copy `gateway.example.json` to `gateway.json` in Capri's application-data folder (on Mac, `~/Library/Application Support/Capri/gateway.json`), set your gateway's base URL and key prefix, then restart Capri. You can instead set `CAPRI_GATEWAY_CONFIG` to an absolute path, such as an ignored `.local/gateway.json` in your checkout. Only HTTPS and loopback HTTP addresses are accepted. Add the API key through Brain as usual; do not put it in this JSON file. The endpoint and prefix stay outside tracked source, and the saved key remains in Capri's private data folder. `gateway.json`, `.local/`, and `out/` are ignored by Git. Ignoring a file does not remove copies from existing commits; push only a branch whose history has been checked.
+
 - **Pencil:** type to her
 - **Wave:** voice chat
+- **Mac TALK:** hold the TALK half of her hover pill to record, then release to send. Allow Microphone access when asked. The first hold downloads a 148 MB Whisper base model; hold again when ready. Transcription runs locally and temporary audio is deleted after processing. The resulting text uses your selected brain, and ElevenLabs or Pocket TTS can speak the reply. Recordings stop after 30 seconds.
+- **Local speech on Mac and Linux:** choose **Settings > Voice > Use Pocket TTS (local)**, then a speaker under **Pocket voices (English)**. The first use downloads the official Pocket runtime (verified with SHA-256), a roughly 235 MB speech model and the selected voice into Capri's data folder. Later speech runs locally without an API key or a voice recording. Pitch, speed, robot, glitch, layers and volume still apply. Choose **Use ElevenLabs** to switch back; its key and voice are kept. Pocket currently uses the verified January 2026 English model. It generates a complete reply before playback, so long replies can take a while; text appears while you wait. Shared voices come from Kyutai's public model repository.
 - **Drag her:** sit her on a window
 - **Right-click her** or the tray icon: menu and settings
+- **Text-only replies on Mac and Linux:** untick **Settings > Voice > Speak replies**. This stops speech and keeps your selected provider and voice saved. Tick it again to speak replies; the choice is remembered after restarting.
 
 Just ask her for things, like "open Spotify", "play Blinding Lights", "pause", "what's playing?" or "close Discord".
 

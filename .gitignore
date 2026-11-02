@@ -1,4 +1,11 @@
 out/
 cross/bin/
 cross/obj/
+tests/**/bin/
+tests/**/obj/
 node_modules/
+
+.local/
+.DS_Store
+**/.DS_Store
+gateway.json

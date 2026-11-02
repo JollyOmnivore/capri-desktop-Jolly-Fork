@@ -42,6 +42,28 @@ out/cross/Capri --smoke out/cross-smoke
 
 On Windows, use `out\cross\Capri.exe` instead. CI runs all three on every pull request.
 
+The work gateway checks use fake keys and a local mock server, without opening Capri or contacting an AI provider:
+
+```bash
+dotnet run --project tests/GatewayChecks/GatewayChecks.csproj -c Release
+```
+
+Mac builds also compile `cross/mac/Microphone.swift` with Xcode Command Line Tools. Local push-to-talk uses Whisper base through Whisper.net; audio is recorded only while TALK is held, with a 30-second cap. The model is downloaded once with a pinned SHA-256. Microphone access needs a bundled app with `NSMicrophoneUsageDescription` from `cross/mac/Info.plist`.
+
+To test transcription and recording cleanup without opening the microphone, supply the pinned model and the public `samples/jfk.wav` from whisper.cpp:
+
+```bash
+dotnet run --project tests/LocalSpeechChecks/LocalSpeechChecks.csproj -c Release -- /path/to/ggml-base.bin /path/to/jfk.wav
+```
+
+Pocket TTS checks exercise process cancellation, temporary file cleanup, WAV validation and the shared audio format without a model download:
+
+```bash
+dotnet run --project tests/PocketVoiceChecks/PocketVoiceChecks.csproj -c Release
+```
+
+Add `-- --live /path/to/test-data` to install the pinned official runtime and generate real speech without playing it. Its public model cache lives under `test-data/pocket-tts/cache`. The app smoke test also checks provider switching, saved voice selection, all effects and layers, and audio completing after the text fallback.
+
 ## House rules
 
 - **Match the code around you.** No code comments, plain names, and the same layout as the file you're in.
