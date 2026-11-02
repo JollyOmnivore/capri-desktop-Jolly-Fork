@@ -41,6 +41,7 @@ namespace CapriDesktop
         private TcpListener fakeVoice;
         private readonly List<string> voiceAsked = new List<string>();
         private readonly List<byte[]> spoken = new List<byte[]>();
+        private readonly Func<string, int, string> searchWas;
         private readonly List<string> speechAsked = new List<string>();
         private int pocketStage;
         private byte[] pocketWave;
@@ -78,6 +79,8 @@ namespace CapriDesktop
         {
             this.pet = pet;
             this.folder = folder;
+            searchWas = Hands.SearchWeb;
+            Hands.SearchWeb = delegate { return WebSearch.Results("{\"results\":[{\"title\":\"Search sample\",\"url\":\"https://example.com/search-sample\",\"content\":\"Readable public test information.\"}]}", 3); };
             Hands.PleaseRoll = delegate { return 1; };
             Directory.CreateDirectory(folder);
             if (File.Exists(Path.Combine(folder, "me.md"))) File.Delete(Path.Combine(folder, "me.md"));
@@ -142,6 +145,9 @@ namespace CapriDesktop
         {
             if (step == 0)
             {
+                string searched = Hands.Do("web_search", new ToolArguments { Query = "public test query" });
+                if (searched.IndexOf("Readable public test information.", StringComparison.Ordinal) < 0 || searched.IndexOf("https://example.com/search-sample", StringComparison.Ordinal) < 0 || Security.Needs("web_search", new ToolArguments()) != Security.Open) throw new Exception("Web search didn't return readable sources or respect website permissions.");
+                checks.Add("PASS web search: local search results supply readable excerpts and source links through the website permission gate");
                 foreach (Clip clip in pet.Clips) if (!clip.Even || clip.Strip.PixelSize.Height != 384) throw new Exception("A sprite strip doesn't split into even 384 px cells.");
                 checks.Add("PASS sprites: all " + pet.Clips.Count + " clips, standing and perched, load from the app and split into even cells");
                 foreach (string clipName in new[] { "morning", "late", "miss" })
@@ -2317,6 +2323,7 @@ namespace CapriDesktop
         {
             if (finished) return;
             finished = true;
+            Hands.SearchWeb = searchWas;
             foreach (Process process in shelves)
             {
                 try
