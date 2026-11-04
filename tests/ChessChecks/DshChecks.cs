@@ -8,6 +8,7 @@ using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using CapriDesktop;
+using System.Text.Json;
 
 internal sealed class DshTestApp : Application
 {
@@ -66,6 +67,26 @@ internal sealed class DshTestApp : Application
             Task<bool> canceled = pet.ApproveDsh("bash", "{\"command\":\"printf hello\"}", "/test/workspace", stop.Token);
             await Approval(); stop.Cancel();
             Check(!await canceled, "canceling a turn withdraws its pending permission");
+            pet.PickBrain("qwen3.5:9b");
+            DshOptions options = new DshOptions { Node = "/usr/local/bin/node", Runtime = Path.GetFullPath("out/dsh-runtime"), Workspace = Path.Combine(Entry.Folder, "workspace") };
+            File.WriteAllText(Path.Combine(Entry.Folder, "dsh.json"), JsonSerializer.Serialize(options));
+            pet.OpenMainframe();
+            var frame = pet.Frame;
+            Check(frame.Row("DSH backend").IsVisible, "DSH toggle is visible on the Mainframe main page");
+            frame.Change("DSH backend", 1);
+            Check(pet.Saved.Dsh && ((NeonSwitch)frame.Row("DSH backend")).Checked, "Mainframe toggle enables the configured local DSH backend");
+            frame.SavePicture(Path.Combine(Entry.Folder, "dsh-mainframe.png"));
+            Check(frame.Overlap() == null && frame.Outside() == null, "Mainframe DSH controls fit without overlapping brain and voice rows");
+            frame.Change("DSH backend", 0);
+            Check(!pet.Saved.Dsh && !((NeonSwitch)frame.Row("DSH backend")).Checked, "Mainframe toggle restores the original engine");
+            frame.Press("DSH setup");
+            Check(desktop.Windows.Any(w => w.Title == "Capri · Experimental DSH"), "Mainframe setup button opens DSH configuration");
+            desktop.Windows.Single(w => w.Title == "Capri · Experimental DSH").Close();
+            options.Runtime = Path.Combine(Entry.Folder, "missing-runtime");
+            File.WriteAllText(Path.Combine(Entry.Folder, "dsh.json"), JsonSerializer.Serialize(options));
+            frame.Change("DSH backend", 1);
+            Check(!pet.Saved.Dsh && !((NeonSwitch)frame.Row("DSH backend")).Checked && pet.DshProblem != null, "missing runtime leaves Mainframe toggle off and shows a setup error");
+            desktop.Windows.Single(w => w.Title == "Capri · Experimental DSH").Close();
         }
         catch (Exception error) { failure = error.ToString(); checks.Add("FAIL " + failure); Console.Error.WriteLine(failure); }
         File.WriteAllLines(Path.Combine(Entry.Folder, "checks.txt"), checks);

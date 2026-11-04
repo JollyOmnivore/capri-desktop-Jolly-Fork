@@ -13,6 +13,7 @@ const { JsonRpcLineTransport } = await load('@deepseek-ai/dsh-sdk-protocol');
 const { HarnessSdkJsonRpcServer } = await load('@deepseek-ai/dsh-sdk-jsonrpc-server');
 const { runProfile } = await load('@deepseek-ai/dsh/profile-boot');
 const { createLaunchEnvironmentSnapshot } = await load('@deepseek-ai/dsh-launch-environment');
+const { validateJsonSchemaValue } = await load('@deepseek-ai/dsh-tools');
 const transport = new JsonRpcLineTransport(process.stdin, process.stdout);
 let server, runtime, initialized = false, calls = 0;
 const deny = reason => ({ kind: 'deny', reason });
@@ -59,10 +60,27 @@ async function initialize(params) {
     const patch = join(home, 'capri.patch.json');
     writeFileSync(patch, JSON.stringify(patches), { mode: 0o600 });
     runtime = await runProfile({ profile: 'sdk-minimal', patchFiles: [patch], args: [], environment: createLaunchEnvironmentSnapshot([{ source: 'process', values: { ...process.env } }]) });
+    const bridged = new Map();
+    for (const tool of params.tools ?? []) {
+        if (!/^[a-z][a-z_]{0,63}$/.test(tool.name) || runtime.ctx.tools.get(tool.name) || bridged.has(tool.name)) throw new Error('Conflicting Capri tool');
+        bridged.set(tool.name, tool);
+        runtime.ctx.tools.register({ ...tool,
+            output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+            execute: async (args, exec) => {
+                if (validateJsonSchemaValue(tool.parameters, args).length) throw new Error('Invalid Capri tool arguments');
+                const result = await transport.request('capri/tool', { tool: tool.name, callId: exec.callId, arguments: args }, exec.signal);
+                if (exec.signal.aborted) throw new Error('Capri action cancelled');
+                if (result?.isError || typeof result?.text !== 'string') throw new Error(result?.text ?? 'Capri tool failed');
+                return result.text;
+            }
+        });
+    }
     runtime.ctx.on('tools/pre-execute', async (exec, next) => {
-        if (!['read', 'write', 'edit', 'bash'].includes(exec.name)) return deny('Tool is not enabled in Capri');
+        if (!['read', 'write', 'edit', 'bash'].includes(exec.name) && !bridged.has(exec.name)) return deny('Tool is not enabled in Capri');
         if (exec.arguments?.sandbox_permissions && exec.arguments.sandbox_permissions !== 'workspace-write') return deny('Sandbox escalation is not enabled in Capri');
         if (++calls > 12) return deny('Tool limit reached; ask the user to continue in another turn');
+        if (params.toolMode !== 'all' && exec.name !== 'web_search' && (params.toolMode !== 'search-open' || exec.name !== 'open_website')) return deny('This turn is limited to the requested web search');
+        if (bridged.has(exec.name)) return await next();
         if (exec.name !== 'bash' && !confinedPath(workspace, exec.arguments?.file_path)) return deny('File must be inside the selected workspace');
         if (exec.signal.aborted) return { kind: 'cancel' };
         try {

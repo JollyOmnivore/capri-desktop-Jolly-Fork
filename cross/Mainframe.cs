@@ -150,6 +150,8 @@ namespace CapriDesktop
         private readonly NeonCaption brainName, brainNote, tierNote, voiceNote, updateNote;
         private readonly NeonButton more, advanced, minimize, close, setup, refresh, textConnect, voiceConnect, customVoice, showHide;
         private readonly NeonCaption build;
+        private readonly NeonSwitch dsh;
+        private readonly NeonButton dshSetup;
         private readonly Dictionary<NeonEntry, string> entries = new Dictionary<NeonEntry, string>();
         private readonly NeonRung[] brains = new NeonRung[3];
         private readonly NeonRung[] voices = new NeonRung[4];
@@ -210,6 +212,10 @@ namespace CapriDesktop
             Caption("Free keys can be rate limited and slow.", 28, 294, 328, 18, MainframeTheme.Yellow, 34.0 / 3);
             Caption("That's a paid key: it goes under MAX INTELLIGENCE.", 28, 315, 328, 24, MainframeTheme.Yellow);
             Key("Move to MAX", 28, 350, 128, 24, () => { string key = paidKey; if (key == null) return; paidKey = null; pet.SetBrainTier(2); pet.SaveBrainKey(key, 2); });
+            dsh = Toggle("DSH backend", 0, 390, () => pet.Saved.Dsh, on => { if (!pet.SetDsh(on) && on) pet.OpenDsh(); });
+            dsh.Width = 244; dsh.Switch = 68; dsh.IsEnabled = OperatingSystem.IsMacOS();
+            dshSetup = Key("DSH setup", 280, 393, 76, 22, pet.OpenDsh);
+            dshSetup.IsEnabled = OperatingSystem.IsMacOS();
             Section("VOICE", 0, 184);
             string[] voiceNames = { "OFF", "POCKET TTS", "CUSTOM LOCAL", "CLOUD VOICE" };
             string[] voiceHints = { "Silent · text only", "Runs on this computer", "Your own model", "Needs a key" };
@@ -458,7 +464,7 @@ namespace CapriDesktop
                 for (int i = 0; i < brains.Length; i++) { brains[i].Checked = i == pet.MainframeTier; brains[i].InvalidateVisual(); }
                 for (int i = 0; i < voices.Length; i++) if (voices[i] != null) { voices[i].Checked = i == pet.MainframeVoiceMode; voices[i].InvalidateVisual(); }
                 brainName.Text = pet.Brain.Remote != null ? pet.Brain.Remote.Name + " · " + pet.Brain.Model : pet.Brain.Model ?? "Her brain isn't set up yet";
-                brainNote.Text = pet.MainframeTier > 0 && pet.MainframeConnecting ? "Checking the key..." : pet.MainframeProblem ?? pet.MainframeProgress ?? (pet.Brain.Remote != null ? "Key saved, ends " + Voice.Tail(pet.MainframeBrainKey) : pet.MainframeTier > 0 ? "Paste a brain key and press Connect." : pet.Brain.Server != null ? pet.Brain.Server : pet.Brain.Model == null ? "Set up her brain, or open Ollama and press Refresh." : "Local model · Ollama");
+                brainNote.Text = pet.DshProblem ?? (pet.Saved.Dsh ? "DSH · local Ollama · approved tools" : pet.MainframeTier > 0 && pet.MainframeConnecting ? "Checking the key..." : pet.MainframeProblem ?? pet.MainframeProgress ?? (pet.Brain.Remote != null ? "Key saved, ends " + Voice.Tail(pet.MainframeBrainKey) : pet.MainframeTier > 0 ? "Paste a brain key and press Connect." : pet.Brain.Server != null ? pet.Brain.Server : pet.Brain.Model == null ? "Set up her brain, or open Ollama and press Refresh." : "Local model · Ollama"));
                 tierNote.Text = pet.MainframeTier == 1 ? pet.Brain.Remote?.Kind == "nvidia" ? "Most NVIDIA models can't see your screen." : "NVIDIA, Gemini, OpenRouter" : pet.MainframeTier == 2 ? "Gemini, OpenRouter, ChatGPT, Claude, DeepSeek" : "Pick one. Only one brain runs at a time.";
                 textKey.Cue = pet.MainframeBrainKey != null ? "Key saved, ends " + Voice.Tail(pet.MainframeBrainKey) : pet.MainframeTier == 1 ? "NVIDIA / Google AI Studio / OpenRouter" : "Paste a brain API key";
                 textConnect.Text = pet.MainframeBrainKey == null || !string.IsNullOrWhiteSpace(textKey.Box.Text) ? "Connect" : "Forget";
@@ -535,7 +541,7 @@ namespace CapriDesktop
                     bool below = control is NeonHead head && head.Text != "BRAIN" || item.Y >= 499 || Array.IndexOf(voices, control) >= 0 || item.Y == 257 || item.Y == 281 || item.Y == 310 || item.Y == 346;
                     if (below)
                     {
-                        y += shift;
+                        y += shift + 36;
                         if (item.Y >= 499) y -= 117 + fold;
                     }
                     if (item.Y == 310) show &= voice == 3;
@@ -544,6 +550,7 @@ namespace CapriDesktop
                         if (control == customVoice) { show &= voice == 2; y -= 36; }
                         else show &= voice == 3 && pet.MainframeVoiceKey != null;
                     }
+                    if (control == dsh || control == dshSetup) y = 184 + shift;
                 }
                 if (item.When != null) show &= item.When();
                 control.IsVisible = show;
