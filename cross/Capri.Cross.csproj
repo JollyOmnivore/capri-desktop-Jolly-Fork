@@ -22,6 +22,7 @@
     <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="../integrations/dsh/bridge.mjs" Link="dsh-bridge.mjs" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Compile Include="../app/Brain.cs" Link="Shared/Brain.cs" />
     <Compile Include="../app/Chess.cs" Link="Shared/Chess.cs" />
     <Compile Include="../app/ChessBoard.cs" Link="Shared/ChessGame.cs" />

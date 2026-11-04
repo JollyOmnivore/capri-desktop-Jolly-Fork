@@ -108,6 +108,8 @@ The mock web-search suite verifies activity callbacks on actual search and brows
 
 ## House rules
 
+The optional Mac DSH backend, pinned runtime setup, permission boundaries and runtime/UI checks are documented in [integrations/dsh/README.md](integrations/dsh/README.md).
+
 - **Match the code around you.** No code comments, plain names, and the same layout as the file you're in.
 - **`app/` is C# 5.** It's built with the `csc.exe` that ships with Windows, so no `$"..."` strings, `?.`, `nameof` or `=>` members.
 - **Add a smoke check** for anything new she does. Look for `checks.Add("PASS ...")` in `app/Capri.cs` or `cross/Smoke.cs`.

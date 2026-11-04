@@ -1,0 +1,120 @@
+using System;
+using System.IO;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Layout;
+using Avalonia.Threading;
+
+namespace CapriDesktop
+{
+    internal sealed partial class Pet
+    {
+        private readonly DshBrain dsh = new DshBrain();
+        private string DshFolder { get { return Program.Smoke ?? folder; } }
+
+        private void CancelBrain() { Brain.Cancel(); dsh.Cancel(); }
+
+        private static Window DshWindow(string title, double width, double height)
+        {
+            return new Window { Title = title, Width = width, Height = height, MinWidth = 500, MinHeight = 500, Background = MainframeTheme.Ground, Foreground = MainframeTheme.White, FontFamily = MainframeTheme.Text, FontSize = 16 };
+        }
+
+        private static Button DshButton(string text)
+        {
+            return new Button { Content = text, Foreground = MainframeTheme.Cyan, Background = MainframeTheme.Deep, BorderBrush = MainframeTheme.DeepEdge, BorderThickness = new Thickness(1), Padding = new Thickness(12, 8) };
+        }
+
+        internal void OpenDsh()
+        {
+            DshOptions options;
+            try { options = DshOptions.Read(DshFolder); }
+            catch (Exception) { options = new DshOptions { Workspace = Path.Combine(DshFolder, "dsh-workspace") }; }
+            Window sheet = DshWindow("Capri · Experimental DSH", 640, 740);
+            StackPanel body = new StackPanel { Margin = new Thickness(22), Spacing = 12 };
+            body.Children.Add(new TextBlock { Text = "DSH backend · local Ollama", FontSize = 22 });
+            body.Children.Add(new TextBlock { Text = "Experimental chat backend. Keeps Capri's personality, notes, conversation and voice. DSH provides read, write, edit and bash tools. Each operation asks for approval. Capri's search, browser, screen and desktop tools still use the Capri engine and are not connected to DSH yet.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
+            CheckBox enabled = new CheckBox { Content = "Use DSH for typed and push-to-talk chat", IsChecked = Saved.Dsh };
+            body.Children.Add(enabled);
+            TextBox Field(string label, string value)
+            {
+                body.Children.Add(new TextBlock { Text = label });
+                TextBox field = new TextBox { Text = value, Foreground = MainframeTheme.White, Background = MainframeTheme.Field, BorderBrush = MainframeTheme.Rule };
+                body.Children.Add(field);
+                return field;
+            }
+            TextBox node = Field("Node executable (24.9 or newer)", options.Node);
+            TextBox runtime = Field("Pinned runtime folder (contains node_modules)", options.Runtime);
+            TextBox workspace = Field("Workspace for file changes and commands", options.Workspace);
+            body.Children.Add(new TextBlock { Text = "Commands use the Mac sandbox: workspace and temporary files are writable. Shell commands can read other files and access the network. Review the full command before allowing it. Closing an approval denies it. Only local Ollama is supported here; work gateway keys are not passed to DSH.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
+            TextBlock problem = new TextBlock { TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+            body.Children.Add(problem);
+            Button save = DshButton("Save backend settings");
+            save.HorizontalAlignment = HorizontalAlignment.Left;
+            save.Click += delegate
+            {
+                try
+                {
+                    DshOptions next = new DshOptions { Node = node.Text?.Trim(), Runtime = runtime.Text?.Trim(), Workspace = workspace.Text?.Trim(), Port = options.Port };
+                    if (enabled.IsChecked == true)
+                    {
+                        if (Brain.Remote != null || Brain.Server != null) throw new InvalidOperationException("Choose a local Ollama model under Brain before enabling DSH.");
+                        DshBrain.StartInfo(next, Path.Combine(AppContext.BaseDirectory, "dsh-bridge.mjs"), Path.Combine(DshFolder, "dsh"));
+                    }
+                    Directory.CreateDirectory(DshFolder);
+                    File.WriteAllText(Path.Combine(DshFolder, "dsh.json"), JsonSerializer.Serialize(next, new JsonSerializerOptions { WriteIndented = true }));
+                    CancelBrain();
+                    Saved.Dsh = enabled.IsChecked == true;
+                    Save();
+                    sheet.Close();
+                }
+                catch (Exception error) { problem.Text = error.Message; }
+            };
+            body.Children.Add(save);
+            sheet.Content = new ScrollViewer { Content = body };
+            sheet.Show();
+        }
+
+        internal Task<bool> ApproveDsh(string tool, string arguments, string workspace, CancellationToken stop)
+        {
+            TaskCompletionSource<bool> answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Dispatcher.UIThread.Post(delegate
+            {
+                if (stop.IsCancellationRequested || quitting) { answer.TrySetResult(false); return; }
+                Talk.Activity.AwaitApproval();
+                Window sheet = DshWindow("Capri · Allow DSH operation?", 720, 600);
+                sheet.Topmost = true;
+                StackPanel body = new StackPanel { Margin = new Thickness(20), Spacing = 12 };
+                body.Children.Add(new TextBlock { Text = "Allow " + tool + " once?", FontSize = 22 });
+                body.Children.Add(new TextBlock { Text = "Workspace: " + workspace, TextWrapping = Avalonia.Media.TextWrapping.Wrap });
+                body.Children.Add(new TextBlock { Text = tool == "bash" ? "This command can read files outside the workspace and use the network. Review every command, including chained commands." : "Review the exact path and contents below.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
+                string shown;
+                try { using JsonDocument parsed = JsonDocument.Parse(arguments); shown = JsonSerializer.Serialize(parsed.RootElement, new JsonSerializerOptions { WriteIndented = true }); }
+                catch { shown = arguments; }
+                body.Children.Add(new TextBox { Text = shown, IsReadOnly = true, AcceptsReturn = true, Height = 290, Foreground = MainframeTheme.White, Background = MainframeTheme.Field, BorderBrush = MainframeTheme.Rule, TextWrapping = Avalonia.Media.TextWrapping.Wrap });
+                StackPanel buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+                Button deny = DshButton("Deny"), allow = DshButton("Allow once");
+                buttons.Children.Add(deny); buttons.Children.Add(allow); body.Children.Add(buttons);
+                deny.Click += delegate { answer.TrySetResult(false); sheet.Close(); };
+                allow.Click += delegate { if (!stop.IsCancellationRequested) Talk.Activity.ResumeTool(); answer.TrySetResult(!stop.IsCancellationRequested); sheet.Close(); };
+                CancellationTokenRegistration canceled = stop.Register(() => Dispatcher.UIThread.Post(() => { answer.TrySetResult(false); sheet.Close(); }));
+                sheet.Closed += delegate { canceled.Dispose(); answer.TrySetResult(false); };
+                sheet.Content = new ScrollViewer { Content = body };
+                sheet.Show();
+            });
+            return answer.Task;
+        }
+
+        private string AskDsh(string text, int revision)
+        {
+            if (Brain.Remote != null || Brain.Server != null) throw new InvalidOperationException("DSH is configured for local Ollama. Switch to the Capri engine for your current provider.");
+            string said = dsh.Ask(DshOptions.Read(DshFolder), Path.Combine(AppContext.BaseDirectory, "dsh-bridge.mjs"), Path.Combine(DshFolder, "dsh"), Brain.Model, Brain.Character + Brain.Remembered(), text, Brain.History, ApproveDsh,
+                (tool, result) => Dispatcher.UIThread.Post(() => { if (Brain.Revision == revision) Talk.Activity.Tool(tool, result); }), () => Brain.Revision == revision);
+            if (Brain.Revision != revision) throw new OperationCanceledException();
+            Brain.Remember(text, said);
+            return said;
+        }
+    }
+}
