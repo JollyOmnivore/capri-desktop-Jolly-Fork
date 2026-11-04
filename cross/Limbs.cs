@@ -131,7 +131,7 @@ namespace CapriDesktop
                 if (tool != "look_at_screen" && !Hands.Checking(tool, args) && !string.IsNullOrEmpty(done)) Brain.Transcribe(null, "Job: " + done);
                 return done;
             };
-            Hands.Resume = delegate(string text) { return Security.Resume(text, brain.Act); };
+            Hands.Resume = delegate(string text) { return Security.Resume(text, brain.Observed(brain.Act, brain.Revision)); };
         }
 
         internal static void Open(string id, bool mac)

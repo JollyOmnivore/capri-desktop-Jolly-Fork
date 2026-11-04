@@ -435,6 +435,32 @@ namespace CapriDesktop
             lock (serverGate) { address = server; key = serverKey; }
         }
         internal Func<string, ToolArguments, string> Act;
+        internal Action<int, string, string> ToolActivity;
+        internal int Revision { get { lock (gate) return cancelled; } }
+
+        internal Func<string, ToolArguments, string> Observed(Func<string, ToolArguments, string> action, int ticket)
+        {
+            if (action == null) return null;
+            return delegate(string tool, ToolArguments args)
+            {
+                Check(ticket);
+                ReportTool(ticket, tool, null);
+                try
+                {
+                    string result = action(tool, args);
+                    ReportTool(ticket, tool, result ?? "Couldn't confirm that action.");
+                    return result;
+                }
+                catch { ReportTool(ticket, tool, "Couldn't finish that action."); throw; }
+            };
+        }
+
+        private void ReportTool(int ticket, string tool, string result)
+        {
+            Action<int, string, string> report = ToolActivity;
+            if (report == null) return;
+            try { report(ticket, tool, result); } catch (Exception) { }
+        }
         // Her tools here for a brain that can or can't see. Checks hand her another computer's, like a Mac's.
         internal Func<bool, Hands.Kit> Kit = Hands.KitFor;
 #if !CROSS
@@ -1849,7 +1875,7 @@ namespace CapriDesktop
             }
 #endif
             if (model == null) throw new BrainException(Offline);
-            Func<string, ToolArguments, string> act = Act;
+            Func<string, ToolArguments, string> act = Observed(Act, ticket);
             bool fileChat = false;
 #if !CROSS
             fileChat = Attachments.Has;
@@ -2273,7 +2299,7 @@ namespace CapriDesktop
         // nothing's happened yet. Null means her usual reply from the results: SECURITY held a call, a job was stopped or the rounds ran out.
         private string WorkOut(string model, List<ChatMessage> asking, string request, List<KeyValuePair<string, ToolArguments>> calls, List<string> results, List<string> facts, int budget, int ticket, Hands.Kit kit)
         {
-            Func<string, ToolArguments, string> act = Act;
+            Func<string, ToolArguments, string> act = Observed(Act, ticket);
             bool reminded = false;
             for (int round = 0; round < Rounds; round++)
             {

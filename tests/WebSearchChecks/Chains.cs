@@ -33,7 +33,7 @@ internal static class Chains
         return JsonSerializer.Serialize(new { choices = new[] { new { message = new { role = "assistant", content = "", tool_calls = multiple ? new[] { call, call } : new[] { call } }, finish_reason = "tool_calls" } } });
     }
 
-    private static async Task Case(string name, string request, string selection, int requests, bool opens, bool follow = true, bool holdSearch = false, bool holdOpen = false, bool failSearch = false, bool cancel = false, bool planning = false)
+    private static async Task Case(string name, string request, string selection, int requests, bool opens, bool follow = true, bool holdSearch = false, bool holdOpen = false, bool failSearch = false, bool cancel = false, bool planning = false, bool promise = false)
     {
         int searchCount = 0;
         List<string> opened = new List<string>();
@@ -54,6 +54,8 @@ internal static class Chains
         Brain.GetField("WorkGateway", Members).SetValue(null, "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/v1");
         Brain.GetField("GatewayKeyPrefix", Members).SetValue(null, "fixture_");
         object model = Activator.CreateInstance(Brain, true);
+        var activity = new List<string>();
+        Brain.GetField("ToolActivity", Members).SetValue(model, new Action<int, string, string>((revision, name, result) => activity.Add(name + (result == null ? ":start" : ":finish"))));
         Brain.GetField("OwnSteps", Members).SetValue(model, planning);
         Brain.GetField("Model", Members).SetValue(model, "fixture-model");
         Brain.GetField("Remote", Members).SetValue(model, Activator.CreateInstance(Cloud, Members, null, new object[] { "fixture_fake-key", "fixture-model" }, null));
@@ -92,9 +94,11 @@ internal static class Chains
                     Check(json.RootElement.GetProperty("messages")[1].GetProperty("content").GetString().Contains(Link), "follow-up receives actual search results before choosing a link");
                 }
                 else if (firstPlan) Check(json.RootElement.GetProperty("tools").GetArrayLength() > 1, "new planner starts with its available tools");
+                else if (promise && index == 1) Check(json.RootElement.TryGetProperty("tools", out _), "an empty action promise gets a real tool-routing attempt");
                 else Check(!json.RootElement.TryGetProperty("tools", out _), "final answer cannot trigger more tools");
                 if (cancel) { Call(Brain, model, "Cancel"); break; }
                 string response = firstPlan ? Selected(Link, "web_search") : choosing ? selection : "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"The official project is at https://example.com/official-project.\"}}]}";
+                if (promise) response = JsonSerializer.Serialize(new { choices = new[] { new { message = new { role = "assistant", content = index == 0 ? "Hold on, let me do that for you." : "chat" } } } });
                 byte[] payload = Encoding.UTF8.GetBytes(response);
                 byte[] head = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + payload.Length + "\r\nConnection: close\r\n\r\n");
                 await stream.WriteAsync(head, timeout.Token);
@@ -112,6 +116,9 @@ internal static class Chains
         Check(opens ? opened.Count == 1 && opened[0] == Link : opened.Count == 0, name);
         if (holdSearch) Check(searchCount == 0 && answer.Contains("?"), "held search neither runs nor follows up");
         if (holdOpen) Check(answer.Contains("?"), "held browser action preserves the permission question");
+        if (searchCount > 0) Check(activity.Take(2).SequenceEqual(new[] { "web_search:start", "web_search:finish" }), "real search dispatch emits paired activity events");
+        if (opens) Check(activity.TakeLast(2).SequenceEqual(new[] { "open_website:start", "open_website:finish" }), "chained browser dispatch emits paired activity events");
+        if (promise) Check(answer == Hands.GetField("Unpromised", Members).GetRawConstantValue().ToString() && activity.Count == 0, "model prose cannot pretend an action started without dispatch");
     }
 
     internal static async Task<int> Run()
@@ -139,6 +146,7 @@ internal static class Chains
             await Case("new planner retains bounded search-to-open", request, Selected(Link), 3, true, planning: true);
             await Case("new planner cannot open invented links from search excerpts", request, Selected("https://evil.example/"), 2, false, planning: true);
             await Case("new planner keeps text-only searches from triggering more tools", "Search the web for the project and do not open anything", null, 2, false, follow: false, planning: true);
+            await Case("unbacked promises get a truthful answer", "hello fixture", null, 2, false, follow: false, promise: true);
             Console.WriteLine(checks + " search-chain checks passed.");
             return checks;
         }

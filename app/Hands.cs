@@ -2323,7 +2323,12 @@ namespace CapriDesktop
         internal static bool Promised(string said)
         {
             string plain = Warmth.Replace((said ?? "").Replace('’', '\''), "");
-            return Promise.IsMatch(plain) || Offered.IsMatch(plain);
+            return Promise.IsMatch(plain) || Offered.IsMatch(plain) || WaitingPromise(plain);
+        }
+
+        internal static bool WaitingPromise(string said)
+        {
+            return Regex.IsMatch((said ?? "").Replace('’', '\''), @"\b(?:let me|lemme|i'll|i will)\s+(?:just\s+)?(?:do|handle|sort out|take care of)\s+(?:that|this|it)\b", RegexOptions.IgnoreCase);
         }
 
         // "Play some lofi for you" said in place of playing it: how a small brain claims a job with no tool behind it.

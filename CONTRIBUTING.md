@@ -96,6 +96,14 @@ The local speech checks also verify selected-device arguments, language names, s
 
 Provider requests use loopback fixtures and fake keys. The search suite also tests the upstream planner against injected source links and text-only search requests.
 
+Tool activity UI checks cover real dispatch callbacks, animated 1x/2x renders, text and voice completion, permission holds, failures, canceled requests, stale results and empty action promises:
+
+```bash
+dotnet run --project tests/ChessChecks/ChessChecks.csproj -c Release -- /absolute/path/to/activity-checks --activity
+```
+
+The mock web-search suite verifies activity callbacks on actual search and browser tool dispatch, including the upstream planner, and an action promise with no dispatched tool.
+
 ## House rules
 
 - **Match the code around you.** No code comments, plain names, and the same layout as the file you're in.

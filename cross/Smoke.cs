@@ -141,6 +141,12 @@ namespace CapriDesktop
         {
             if (step == 0)
             {
+                var activity = new ReplyActivity();
+                activity.Begin(); activity.Tool("web_search", null);
+                if (!activity.Active || activity.Label != "Searching the web") throw new Exception("Tool activity did not start.");
+                activity.Tool("web_search", "Found a source."); activity.Complete();
+                if (activity.Active || activity.Label != "Action finished") throw new Exception("Tool activity did not finish.");
+                checks.Add("PASS reply activity: real work has an active state and completed actions stop animating");
                 var recorder = LocalDictation.Recorder("capri-mic", "speech.wav", "fixture microphone");
                 if (recorder.UseShellExecute || recorder.ArgumentList.Count != 3 || recorder.ArgumentList[1] != "--device" || recorder.ArgumentList[2] != "fixture microphone" || LocalDictation.SpeechLanguage("Spanish") != "es") throw new Exception("Push-to-talk lost its selected input or Whisper language code.");
                 checks.Add("PASS microphone input: the saved UID is a separate recorder argument and language names become Whisper codes");
