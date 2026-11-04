@@ -48,7 +48,7 @@ The work gateway checks use fake keys and a local mock server, without opening C
 dotnet run --project tests/GatewayChecks/GatewayChecks.csproj -c Release
 ```
 
-Mac builds also compile `cross/mac/Microphone.swift` with Xcode Command Line Tools. Local push-to-talk uses Whisper base through Whisper.net; audio is recorded only while TALK is held, with a 30-second cap. The model is downloaded once with a pinned SHA-256. Microphone access needs a bundled app with `NSMicrophoneUsageDescription` from `cross/mac/Info.plist`.
+Mac builds also compile `cross/mac/Microphone.swift` with Xcode Command Line Tools. Local push-to-talk uses Whisper base through Whisper.net; audio is recorded only while TALK is held, with a 30-second cap. The model is downloaded once with a pinned SHA-256. The native helper lists Core Audio inputs without recording; push-to-talk routes an Audio Queue to the selected device and writes 16 kHz mono PCM. Microphone access needs a bundled app with `NSMicrophoneUsageDescription` from `cross/mac/Info.plist`.
 
 To test transcription and recording cleanup without opening the microphone, supply the pinned model and the public `samples/jfk.wav` from whisper.cpp:
 
@@ -85,6 +85,14 @@ The sync integration checks use the same graphical test host to exercise Mainfra
 ```bash
 dotnet run --project tests/ChessChecks/ChessChecks.csproj -c Release -- /absolute/path/to/sync-checks --sync
 ```
+
+Microphone selector UI, saved device migration, refresh races and disconnected inputs can be tested without recording:
+
+```bash
+dotnet run --project tests/ChessChecks/ChessChecks.csproj -c Release -- /absolute/path/to/microphone-checks --microphone
+```
+
+The local speech checks also verify selected-device arguments, language names, silent-input diagnostics and the native PCM writer without capturing live audio.
 
 Provider requests use loopback fixtures and fake keys. The search suite also tests the upstream planner against injected source links and text-only search requests.
 

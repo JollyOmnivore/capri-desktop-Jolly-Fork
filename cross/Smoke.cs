@@ -141,6 +141,9 @@ namespace CapriDesktop
         {
             if (step == 0)
             {
+                var recorder = LocalDictation.Recorder("capri-mic", "speech.wav", "fixture microphone");
+                if (recorder.UseShellExecute || recorder.ArgumentList.Count != 3 || recorder.ArgumentList[1] != "--device" || recorder.ArgumentList[2] != "fixture microphone" || LocalDictation.SpeechLanguage("Spanish") != "es") throw new Exception("Push-to-talk lost its selected input or Whisper language code.");
+                checks.Add("PASS microphone input: the saved UID is a separate recorder argument and language names become Whisper codes");
                 if (new ChessPosition(ChessPosition.Start).Legal().Count != 20 || Hands.Tools.IndexOf("\"chess\"", StringComparison.Ordinal) < 0) throw new Exception("The shared chess engine or native board tool is missing.");
                 checks.Add("PASS chess: the shared legal-move engine loads and the native chess tool is available");
                 string searched = Hands.Do("web_search", new ToolArguments { Query = "public test query" });

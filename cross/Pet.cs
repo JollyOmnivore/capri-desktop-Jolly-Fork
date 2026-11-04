@@ -37,6 +37,7 @@ namespace CapriDesktop
         [DataMember] internal bool Silent;
         [DataMember] internal bool PocketVoice;
         [DataMember] internal string PocketSpeaker;
+        [DataMember] internal string MicrophoneInput;
         [DataMember] internal int Typing;
         [DataMember] internal bool NoDiscord;
         [DataMember] internal string CloudModel;
@@ -1438,7 +1439,7 @@ namespace CapriDesktop
             Brain.Cancel();
             StopSpeech();
             Talk.Dismiss();
-            LocalDictation session = new LocalDictation(folder);
+            LocalDictation session = new LocalDictation(folder) { InputDevice = Saved.MicrophoneInput };
             dictation = session;
             bool setup = !session.Installed;
             Talk.Answer("(microphone)", setup ? "Setting up local speech (148 MB). Hold TALK again when it's ready." : "Starting microphone. Allow Microphone access if macOS asks, then hold TALK again if you already released it.");
@@ -1470,7 +1471,7 @@ namespace CapriDesktop
                     if (ticket != asking || quitting) return;
                     if (problem != null) Talk.Answer("(microphone)", problem);
                     else if (setup) Talk.Answer("(microphone)", "Local speech is ready. Hold TALK, speak, then release to send.");
-                    else if (string.IsNullOrWhiteSpace(text)) Talk.Answer("(microphone)", "I didn't catch any speech. Hold TALK and try again.");
+                    else if (string.IsNullOrWhiteSpace(text)) Talk.Answer("(microphone)", "Audio arrived, but I couldn't recognize speech. Check Microphone input in Capri Mainframe > Settings, then hold TALK and try again.");
                     else Hear(text, true);
                 });
             });
@@ -1848,6 +1849,12 @@ namespace CapriDesktop
             menu.Items.Add(playChess);
             MenuItem extra = new MenuItem { Header = "More options" };
             extra.Items.Add(brainMenu);
+            if (OperatingSystem.IsMacOS())
+            {
+                MenuItem microphone = new MenuItem { Header = "Microphone input..." };
+                microphone.Click += delegate { OpenMicrophone(); };
+                extra.Items.Add(microphone);
+            }
             extra.Items.Add(settings);
             menu.Items.Add(extra);
             menu.Items.Add(sizes);
@@ -4630,6 +4637,7 @@ namespace CapriDesktop
         [DataContract]
         internal sealed class NewSettings
         {
+            [DataMember] internal string MicrophoneInput;
             [DataMember] internal string VoiceProvider;
             [DataMember] internal string LocalVoiceUrl;
             [DataMember] internal string LocalVoiceModel;
@@ -4662,6 +4670,7 @@ namespace CapriDesktop
             saved.LocalVoiceUrl = newer.LocalVoiceUrl;
             saved.LocalVoiceModel = newer.LocalVoiceModel;
             saved.LocalVoiceName = newer.LocalVoiceName;
+            if (newer.MicrophoneInput != null) saved.MicrophoneInput = newer.MicrophoneInput;
             saved.LocalVoiceFormat = newer.LocalVoiceFormat;
             saved.BrainServer = newer.BrainServer;
             saved.ServerModel = newer.ServerModel;
@@ -4685,7 +4694,7 @@ namespace CapriDesktop
 
         internal static NewSettings Newest(Settings saved)
         {
-            return new NewSettings { VoiceProvider = saved.VoiceProvider, LocalVoiceUrl = saved.LocalVoiceUrl, LocalVoiceModel = saved.LocalVoiceModel, LocalVoiceName = saved.LocalVoiceName, LocalVoiceFormat = saved.LocalVoiceFormat, BrainServer = saved.BrainServer, ServerModel = saved.ServerModel,
+            return new NewSettings { MicrophoneInput = saved.MicrophoneInput, VoiceProvider = saved.VoiceProvider, LocalVoiceUrl = saved.LocalVoiceUrl, LocalVoiceModel = saved.LocalVoiceModel, LocalVoiceName = saved.LocalVoiceName, LocalVoiceFormat = saved.LocalVoiceFormat, BrainServer = saved.BrainServer, ServerModel = saved.ServerModel,
                 MainframeSize = saved.MainframeSize, AdvancedSettings = saved.AdvancedSettings, MemorySize = saved.MemorySize, ReplyLength = saved.ReplyLength, BrainTier = saved.BrainTier, FreeModel = saved.FreeModel, PaidModel = saved.PaidModel, SpeechModel = saved.SpeechModel,
                 CareSwitches = saved.CareSwitches, CareTimes = saved.CareTimes, CareNight = saved.CareNight, NoHeadPats = saved.NoHeadPats, NoFollowUps = saved.NoFollowUps, NoKeepAwake = saved.NoKeepAwake, Vault = saved.Vault };
         }

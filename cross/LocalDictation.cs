@@ -20,6 +20,25 @@ namespace CapriDesktop
         private readonly CancellationTokenSource cancel = new CancellationTokenSource();
         private Process recorder;
         private bool released;
+        internal string InputDevice;
+
+        internal static ProcessStartInfo Recorder(string helper, string audio, string device)
+        {
+            ProcessStartInfo start = new ProcessStartInfo(helper) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            start.ArgumentList.Add(audio);
+            if (!string.IsNullOrEmpty(device))
+            {
+                if (!MicrophoneInputs.Valid(device)) throw new IOException("Choose a valid microphone input in Capri Mainframe > Settings > Microphone input.");
+                start.ArgumentList.Add("--device");
+                start.ArgumentList.Add(device);
+            }
+            return start;
+        }
+
+        internal static string SpeechLanguage(string language)
+        {
+            return Regex.IsMatch(language ?? "", @"\A[a-z]{2,3}\z", RegexOptions.IgnoreCase) ? language.ToLowerInvariant() : Brain.LanguageCode(language);
+        }
 
         internal LocalDictation(string data) { folder = Path.Combine(data, "speech"); }
         internal string Model { get { return Path.Combine(folder, "ggml-base.bin"); } }
@@ -62,11 +81,11 @@ namespace CapriDesktop
             Directory.CreateDirectory(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             string audio = Path.Combine(temporary, "speech.wav");
             Process process = null;
+            bool listening = false;
             try
             {
                 string helper = Path.Combine(AppContext.BaseDirectory, "capri-mic");
-                ProcessStartInfo start = new ProcessStartInfo(helper) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-                start.ArgumentList.Add(audio);
+                ProcessStartInfo start = Recorder(helper, audio, InputDevice);
                 lock (gate)
                 {
                     if (released) return "";
@@ -79,14 +98,22 @@ namespace CapriDesktop
                     timeout.CancelAfter(TimeSpan.FromSeconds(45));
                     Task<string> error = process.StandardError.ReadToEndAsync(timeout.Token);
                     string ready = await process.StandardOutput.ReadLineAsync(timeout.Token);
-                    if (ready == "READY" && status != null) status("Listening on this Mac. Release TALK when done (30 seconds maximum).");
+                    listening = ready != null && (ready == "READY" || ready.StartsWith("READY\t", StringComparison.Ordinal));
+                    if (listening && status != null)
+                        status("Listening on " + (ready.Length > 6 ? ready.Substring(6) : "this Mac") + ". Release TALK when done (30 seconds maximum).");
                     await process.WaitForExitAsync(timeout.Token);
                     string problem = (await error).Trim();
                     if (process.ExitCode != 0) throw new IOException(problem.Length > 0 ? problem : "Couldn't record. Check Microphone access for Capri in System Settings.");
                 }
                 lock (gate) recorder = null;
                 cancel.Token.ThrowIfCancellationRequested();
-                if (!File.Exists(audio)) return "";
+                if (!listening) throw new IOException("Recording ended before the microphone was ready. Hold TALK until Listening appears, speak, then release.");
+                if (!File.Exists(audio)) throw new IOException("No audio arrived from the microphone. Check Microphone input in Capri Mainframe > Settings.");
+                int sampleRate;
+                short[] captured = Voice.Samples(await File.ReadAllBytesAsync(audio, cancel.Token), out sampleRate);
+                if (captured.Length == 0) throw new IOException("No audio arrived from the microphone. Reconnect it or choose another Microphone input in Capri Mainframe > Settings.");
+                if (captured.Length < 16000 / 3) throw new IOException("The recording was too short. Hold TALK until Listening appears, speak, then release.");
+                if (!Audible(captured)) throw new IOException("No microphone signal was detected. Choose your input in Capri Mainframe > Settings > Microphone input and check its input level in macOS Sound settings.");
                 if (status != null) status("Transcribing on this Mac...");
                 return await TranscribeAsync(audio, language, cancel.Token);
             }
@@ -113,7 +140,7 @@ namespace CapriDesktop
             if (rate != 16000) throw new IOException("Local speech needs a 16 kHz microphone recording.");
             if (samples.Length < rate / 3 || !Audible(samples)) return "";
             using (WhisperFactory factory = WhisperFactory.FromPath(Model))
-            using (WhisperProcessor processor = factory.CreateBuilder().WithLanguage(string.IsNullOrEmpty(language) ? "en" : language).Build())
+            using (WhisperProcessor processor = factory.CreateBuilder().WithLanguage(SpeechLanguage(language)).Build())
             using (FileStream stream = File.OpenRead(audio))
             {
                 StringBuilder text = new StringBuilder();
