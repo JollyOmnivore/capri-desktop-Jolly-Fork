@@ -72,6 +72,14 @@ dotnet run --project tests/WebSearchChecks/WebSearchChecks.csproj -c Release
 
 The same suite tests search-to-open sequencing, returned-link validation, rejected extra tools, permission holds and cancellation against a mock model API. Add `-- --live http://127.0.0.1:8080 qwen3.5:9b` to also exercise an existing local SearXNG instance and a local Ollama model with public test queries, including finding and selecting the official Pocket TTS repo. Browser launches are intercepted in the tests. The normal checks never contact a search engine or use real credentials. The app smoke test uses a search fixture.
 
+Native Mac/Linux chess uses the same rules, engine and game state as Windows. Dedicated checks exercise real routed pointer events and controls, including promotion, hints, worker cancellation and offline chat commands, and save board renders at 1x and 2x:
+
+```bash
+dotnet run --project tests/ChessChecks/ChessChecks.csproj -c Release -- /absolute/path/to/chess-checks
+```
+
+These checks need a graphical session but do not move the real mouse, record audio, call an AI model or use a paid voice. Their settings are isolated in the output folder.
+
 ## House rules
 
 - **Match the code around you.** No code comments, plain names, and the same layout as the file you're in.

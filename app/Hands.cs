@@ -449,7 +449,7 @@ namespace CapriDesktop
         internal static string Note { get { return Here(Noted) + Security.Note + MiniNote + MiniBoard() + DrawingNote; } }
 
 #if CROSS
-        private const string MiniNote = "";
+        private const string MiniNote = "\nYou have a local desktop chess board. Use mini_game with name chess to open it, or action again, undo, hint, resign, level or close. Chess has easy, normal and hard levels; side is the user's white or black pieces. The local chess engine handles legal moves and your replies, with no model or API key needed. They move by clicking or dragging pieces. Requests to play online belong in their browser. When a board is open, answer chess chat from its position below; never invent moves or positions.";
 #else
         private const string MiniNote = "\nYour own desktop boards are tic-tac-toe, connect four, rock paper scissors and chess. Use mini_game with name tic_tac_toe, connect_four, rock_paper_scissors or chess. A request to play online belongs in their browser. Other games keep using open_app or use_computer. While your board is open, mini_game action move takes their square, column or choice as text; again starts another round and close puts it away. Chess is local, uses mouse moves, and also takes undo, hint, resign and level. Chess levels are easy, normal and hard; side is white by default or black. Board chat is ordinary conversation: answer from the position below.";
 #endif
@@ -570,6 +570,8 @@ namespace CapriDesktop
 #if CROSS
             { "web_search", "Search the web for information and receive readable excerpts with source URLs. Use this for current facts or research; it does not open a browser or read complete articles. Send only a short public search query, without private context or credentials.",
               "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5}},\"required\":[\"query\"]}" },
+            { "mini_game", "Play local chess with Capri. Open the board, start again, undo, ask for a hint, resign, change difficulty or close it. Chess runs locally without a brain or key. The user moves by clicking or dragging pieces.",
+              "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"enum\":[\"chess\"]},\"action\":{\"type\":\"string\",\"enum\":[\"open\",\"again\",\"undo\",\"hint\",\"resign\",\"level\",\"close\"]},\"level\":{\"type\":\"string\",\"enum\":[\"easy\",\"normal\",\"hard\"]},\"side\":{\"type\":\"string\",\"enum\":[\"white\",\"black\"]}},\"required\":[\"name\"]}" },
 #endif
             { "open_app", "Open, launch or play an app or game installed on their PC, like Spotify, Discord, Steam or Roblox. Give its full name, not a nickname: Counter-Strike 2 for cs, Valorant for val. If it's already open and they want something done in it, like a mode, a match or accepting a match, call use_computer instead of opening it again.",
               "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"The app's name\"}},\"required\":[\"name\"]}" },
@@ -1934,6 +1936,8 @@ namespace CapriDesktop
             if (Moon.IsMatch(said ?? "")) { tool = "play_music"; args.Song = MoonSong; args.Kind = "song"; return true; }
             string text = Asked(said);
 #if CROSS
+            ToolArguments chess = MiniInput(text);
+            if (chess != null) { tool = "mini_game"; args = chess; return true; }
             if (SearchOpening(text)) { tool = "web_search"; args.Query = SearchTopic(text); return true; }
             Match webQuery = Regex.Match(text, @"^(?:search (?:the )?(?:web|internet)(?: for)?|look up|research)\s+(.+)$", RegexOptions.IgnoreCase);
             if (webQuery.Success) { tool = "web_search"; args.Query = webQuery.Groups[1].Value.Trim(); return true; }

@@ -145,6 +145,8 @@ namespace CapriDesktop
         {
             if (step == 0)
             {
+                if (new ChessPosition(ChessPosition.Start).Legal().Count != 20 || Hands.Tools.IndexOf("\"chess\"", StringComparison.Ordinal) < 0) throw new Exception("The shared chess engine or native board tool is missing.");
+                checks.Add("PASS chess: the shared legal-move engine loads and the native chess tool is available");
                 string searched = Hands.Do("web_search", new ToolArguments { Query = "public test query" });
                 if (searched.IndexOf("Readable public test information.", StringComparison.Ordinal) < 0 || searched.IndexOf("https://example.com/search-sample", StringComparison.Ordinal) < 0 || Security.Needs("web_search", new ToolArguments()) != Security.Open) throw new Exception("Web search didn't return readable sources or respect website permissions.");
                 checks.Add("PASS web search: local search results supply readable excerpts and source links through the website permission gate");

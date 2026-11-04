@@ -22,6 +22,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../app/Brain.cs" Link="Shared/Brain.cs" />
+    <Compile Include="../app/Chess.cs" Link="Shared/Chess.cs" />
+    <Compile Include="../app/ChessBoard.cs" Link="Shared/ChessGame.cs" />
     <Compile Include="../app/Engine.cs" Link="Shared/Engine.cs" />
     <Compile Include="../app/Hands.cs" Link="Shared/Hands.cs" />
     <Compile Include="../app/Presence.cs" Link="Shared/Presence.cs" />
