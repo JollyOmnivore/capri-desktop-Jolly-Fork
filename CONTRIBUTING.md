@@ -80,6 +80,14 @@ dotnet run --project tests/ChessChecks/ChessChecks.csproj -c Release -- /absolut
 
 These checks need a graphical session but do not move the real mouse, record audio, call an AI model or use a paid voice. Their settings are isolated in the output folder.
 
+The sync integration checks use the same graphical test host to exercise Mainframe voice modes, editable personality migration and upstream provider security regressions, including redirected requests, key isolation, redaction and forgotten-key races:
+
+```bash
+dotnet run --project tests/ChessChecks/ChessChecks.csproj -c Release -- /absolute/path/to/sync-checks --sync
+```
+
+Provider requests use loopback fixtures and fake keys. The search suite also tests the upstream planner against injected source links and text-only search requests.
+
 ## House rules
 
 - **Match the code around you.** No code comments, plain names, and the same layout as the file you're in.

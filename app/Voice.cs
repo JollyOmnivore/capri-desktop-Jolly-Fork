@@ -98,6 +98,10 @@ namespace CapriDesktop
 
         internal bool Ready { get { return Key != null && VoiceId != null; } }
 
+#if !CROSS
+        internal bool Busy { get { return player.Busy; } }
+#endif
+
 #if CROSS
         internal static string Protect(string key) { throw new PlatformNotSupportedException("Saving keys isn't ready on this system yet."); }
 
@@ -116,13 +120,65 @@ namespace CapriDesktop
 
         internal static string Tail(string key) { return key == null || key.Length < 4 ? "" : key.Substring(key.Length - 4); }
 
-        internal static string Spoken(string said)
+        internal static string Spoken(string said) { return Spoken(said, false); }
+
+        // cues keeps her emotion cues in, for a Fish Audio voice to say. Every other bracket still comes off.
+        internal static string Spoken(string said, bool cues)
         {
 #if !CROSS
             said = FileFinder.Spoken(said);
 #endif
+            if (cues) said = Cue.Replace(said ?? "", delegate(Match cue) { return "" + cue.Groups["cue"].Value.ToLowerInvariant() + ""; });
             string words = Regex.Replace(Regex.Replace(said ?? "", @"\[[^\]]*\]", " ").Replace("*", ""), @"\s+", " ").Trim();
-            return Regex.IsMatch(words, @"[\p{L}\p{Nd}]") ? words : "";
+            if (cues) words = words.Replace('', '[').Replace('', ']');
+            return Regex.IsMatch(Uncued(words), @"[\p{L}\p{Nd}]") ? words : "";
+        }
+
+        // Her emotion cues (F54, NoxEterna): a Fish Audio voice says "[laughing] No way!" laughing. A cue is one of Fish Audio's
+        // own names, or a sound a brain tends to write, maybe after "very" or "slightly" and with a word or two more, like
+        // "[whispers sweetly]". Fish Audio's old s1 took its names in round brackets, so "(sad)" is one too. Anything else in
+        // brackets is just text.
+        internal const string Feelings = "happy|sad|angry|excited|calm|nervous|confident|surprised|satisfied|delighted|scared|worried|upset|frustrated|depressed|empathetic|embarrassed|disgusted|moved|proud|relaxed|grateful|curious|sarcastic|disdainful|unhappy|anxious|hysterical|indifferent|uncertain|doubtful|confused|disappointed|regretful|guilty|ashamed|jealous|envious|hopeful|optimistic|pessimistic|nostalgic|lonely|bored|contemptuous|sympathetic|compassionate|determined|resigned|in a hurry tone|shouting|screaming|whispering|soft tone|laughing|chuckling|sobbing|crying loudly|sighing|groaning|panting";
+        private const string Sounds = "emphasis|gasping|yawning|snoring|clear throat|clears throat|long-break|break|laughs?|giggl(?:e|es|ing)|chuckles?|sighs?|gasps?|whispers?|sobs?|cr(?:ying|ies)|sniffl(?:e|es|ing)|groans?|yawns?|scoff(?:s|ing)?|snorts?|hum(?:s|ming)?|pauses?|teasing(?:ly)?|playful(?:ly)?|smug(?:ly)?|flirt(?:y|atious|atiously)|sweetly|softly|warm(?:ly)?|cheerful(?:ly)?|mischievous(?:ly)?|annoyed|pout(?:s|ing)?|gentl(?:e|y)|shy(?:ly)?|sleepy|tired|dramatic(?:ally)?|mock(?:ing|ingly)?|sing(?:s|ing)|cheeky|deadpan|quietly|loudly|evil";
+        internal static readonly Regex Cue = new Regex(@"\[\s*(?<cue>(?:(?:very|slightly|extremely|really|super|so|quite|a bit|a little|kind of|kinda)\s+)?(?:" + Feelings + "|" + Sounds + @")(?:[\s-]+[a-z']+){0,3})\s*\](?!\()|\(\s*(?<cue>(?!moved\b)(?:" + Feelings + @"))\s*\)", RegexOptions.IgnoreCase);
+
+        // What she says without its cues: her bubble, her history and every voice but Fish Audio's. A cue takes the space after
+        // it, or the one before it when it ends a sentence, so the words around it close up.
+        internal static string Uncued(string text)
+        {
+            if (string.IsNullOrEmpty(text) || !Cue.IsMatch(text)) return text ?? "";
+            string plain = Cue.Replace(text, "");
+            plain = Regex.Replace(plain, @"[ \t]*(?:[ \t]*)*[ \t]*(?=[.,!?…;:]|$)", "", RegexOptions.Multiline);
+            return Regex.Replace(plain, @"[ \t]*", "").Trim();
+        }
+
+        // Her reply's cues put back into the same words cleaned up for her bubble: each goes in front of the words it came
+        // before, if they're still there, in Fish Audio's square brackets. One that ended her reply ends this too.
+        internal static string Recued(string raw, string plain)
+        {
+            if (string.IsNullOrEmpty(plain)) return plain ?? "";
+            StringBuilder cued = new StringBuilder();
+            string last = "";
+            int at = 0;
+            foreach (Match cue in Cue.Matches(raw ?? ""))
+            {
+                string name = "[" + cue.Groups["cue"].Value.ToLowerInvariant() + "]";
+                MatchCollection next = Regex.Matches(Uncued(raw.Substring(cue.Index + cue.Length)), @"[\p{L}\p{Nd}]+");
+                if (next.Count == 0) { last += " " + name; continue; }
+                int found = -1;
+                // The three words after it find its place, or two, or one, never before the cue ahead of it.
+                for (int count = Math.Min(3, next.Count); count > 0 && found < 0; count--)
+                {
+                    string[] words = new string[count];
+                    for (int i = 0; i < count; i++) words[i] = Regex.Escape(next[i].Value);
+                    Match spot = new Regex(@"(?<![\p{L}\p{Nd}])" + string.Join(@"[^\p{L}\p{Nd}]+", words) + @"(?![\p{L}\p{Nd}])", RegexOptions.IgnoreCase).Match(plain, at);
+                    if (spot.Success) found = spot.Index;
+                }
+                if (found < 0) continue;
+                cued.Append(plain, at, found - at).Append(name).Append(' ');
+                at = found;
+            }
+            return cued.Append(plain, at, plain.Length - at).Append(last).ToString();
         }
 
         private static readonly string[,] Respelled = { { "chooms", "chewms" }, { "choom", "chewm" }, { "preem", "preme" }, { "yezzirrr", "yessirrr" } };
@@ -209,6 +265,8 @@ namespace CapriDesktop
         internal const string RejectedNew = "ElevenLabs rejected that key. Copy it again from ElevenLabs and paste it.";
 
         internal const string Restricted = "ElevenLabs has restricted your account, so her voice can't connect. Sign in at elevenlabs.io to see why, or pick PREBUILT LOCAL in the Mainframe.";
+        // ElevenLabs' "Access restricted" page, or a 451: their country or network is turned away, whatever the key (Void, in Russia).
+        internal const string Blocked = "ElevenLabs is blocked where you are, so a new key won't help. Pick PREBUILT LOCAL in the Mainframe for her free voice.";
 
         internal static string Unsaved(string problem) { return problem == Rejected ? RejectedNew : problem; }
 
@@ -223,6 +281,7 @@ namespace CapriDesktop
             detail = detail ?? "";
             if (detail.Contains("quota_exceeded")) return "Out of ElevenLabs credits. Pick PREBUILT LOCAL in the Mainframe.";
             if (detail.Contains("account_restricted")) return Restricted;
+            if (status == 451 || status == 403 && Regex.IsMatch(detail, @"access restricted|unsupported[_ ]country|(not available|not supported|unavailable) in your (country|region|location)", RegexOptions.IgnoreCase)) return Blocked;
             if (detail.Contains("missing_permissions")) return "Key is missing permissions. Make a new ElevenLabs key with Restrict key turned off.";
             if (detail.Contains("voice_not_found")) return "Voice not found. Add it to your ElevenLabs voices.";
             // Voices other people shared in the Voice Library only work outside ElevenLabs' site on paid plans; a fresh clone may still be training.
@@ -438,29 +497,52 @@ namespace CapriDesktop
             lock (PcEars.VoiceGate)
             {
                 if (PcEars.Capturing) { Brain.Log("Voice playback", -1, "Speech held while she records the PC's sound."); return; }
-                Stop();
                 int rate;
                 short[] samples = Samples(wav, out rate);
                 if (samples.Length == 0) throw new VoiceException("Her voice returned no PCM samples to play.");
                 if (Loudness == 0) Brain.Log("Voice playback", -1, "Her voice volume is 0%; speech is muted, while her other sounds have their own volume.");
                 else if (Speaker.Loudness(samples, 0, samples.Length) == 0) Brain.Log("Voice playback", -1, "Her voice returned silent PCM: " + samples.Length + " samples at " + rate + " Hz.");
-                player.Open(rate);
-                player.Play(samples);
+                player.BeginAnswer();
+                try { player.Open(rate); player.Play(samples); }
+                finally { player.EndAnswer(); }
             }
 #endif
         }
 
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         internal void Stop()
         {
 #if CROSS
             if (Silence != null) Silence();
 #else
+            // A line stopped with sound still to play goes in errors.txt with what stopped it, so a report of her voice stopping
+            // mid-reply says which part of her did it (ticket 35).
+            double left = player.Left;
+            if (left > 0.5) Brain.Log("voice cut", -1, left.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s left, stopped by " + Stopper());
             player.Close();
 #endif
         }
+
+#if !CROSS
+        internal void Finish() { player.EndAnswer(); player.Close(false); }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static string Stopper()
+        {
+            StackTrace trace = new StackTrace(2, false);
+            List<string> names = new List<string>();
+            for (int i = 0; i < trace.FrameCount && names.Count < 3; i++)
+            {
+                MethodBase method = trace.GetFrame(i).GetMethod();
+                if (method != null) names.Add(method.Name);
+            }
+            return string.Join(" < ", names.ToArray());
+        }
+#endif
     }
 
-    internal enum Cue { Arrive, Leave, Hop, Click }
+    // Bonk is her thud when she's thrown into an edge of her screen or the taskbar.
+    internal enum Cue { Arrive, Leave, Hop, Click, Bonk }
 
     internal static class Sfx
     {
@@ -533,6 +615,7 @@ namespace CapriDesktop
                 case Cue.Arrive: return Sweep(0.42, 330, 990, 0.03, level);
                 case Cue.Leave: return Sweep(0.36, 880, 250, 0.012, level);
                 case Cue.Hop: return Sweep(0.16, 520, 1240, 0.008, level);
+                case Cue.Bonk: return Sweep(0.13, 420, 120, 0.002, level * 4 / 5);
                 default: return Sweep(0.05, 1600, 1350, 0.003, level * 3 / 4);
             }
         }
@@ -2095,6 +2178,239 @@ namespace CapriDesktop
         }
     }
 
+    // Which scripts each language is written in, so she can tell a line her English free voice can't read and which language
+    // it is, and the line in that language about adding a voice for it.
+    internal static class VoiceLanguage
+    {
+        private const string Latin = "a-zA-Z\u00C0-\u024F\u1D00-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F\uFF21-\uFF3A\uFF41-\uFF5A";
+        private static readonly string[,] Scripts =
+        {
+            { "ru uk be bg mk kk mn sr uz az", "\u0400-\u052F\u1C80-\u1C8F\u2DE0-\u2DFF\uA640-\uA69F" },
+            { "el", "\u0370-\u03FF\u1F00-\u1FFF" },
+            { "ka", "\u10A0-\u10FF\u1C90-\u1CBF\u2D00-\u2D2F" },
+            { "hy", "\u0530-\u058F" },
+            { "am", "\u1200-\u139F\u2D80-\u2DDF\uAB00-\uAB2F" },
+            { "th", "\u0E00-\u0E7F" },
+            { "lo", "\u0E80-\u0EFF" },
+            { "km", "\u1780-\u17FF" },
+            { "my", "\u1000-\u109F\uA9E0-\uA9FF\uAA60-\uAA7F" },
+            { "zh ja ko", "\u2E80-\u2FFF\u3005-\u3007\u31C0-\u31EF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF" },
+            { "zh", "\u3100-\u312F\u31A0-\u31BF" },
+            { "ja", "\u3040-\u30FF\u31F0-\u31FF\uFF66-\uFF9D" },
+            { "ko", "\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uAC00-\uD7FF\uFFA0-\uFFDC" },
+            { "hi ne mr", "\u0900-\u097F\uA8E0-\uA8FF" },
+            { "bn", "\u0980-\u09FF" },
+            { "gu", "\u0A80-\u0AFF" },
+            { "pa", "\u0A00-\u0A7F" },
+            { "ta", "\u0B80-\u0BFF" },
+            { "te", "\u0C00-\u0C7F" },
+            { "kn", "\u0C80-\u0CFF" },
+            { "ml", "\u0D00-\u0D7F" },
+            { "ar ur fa", "\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF" },
+            { "he", "\u0590-\u05FF\uFB1D-\uFB4F" }
+        };
+
+        internal static string Code(string language)
+        {
+            string code = Regex.Match((language ?? "").Trim().ToLowerInvariant(), @"^[a-z]{2,3}(?=[_-]|$)").Value;
+            return code == "cmn" ? "zh" : code == "nb" || code == "nn" ? "no" : code == "tl" ? "fil" : code;
+        }
+
+        internal static bool Reads(string text, string language)
+        {
+            string alphabet = Latin;
+            string code = Code(language);
+            for (int i = 0; i < Scripts.GetLength(0); i++)
+                if ((" " + Scripts[i, 0] + " ").Contains(" " + code + " ")) alphabet += Scripts[i, 1];
+            Regex allowed = new Regex("^[" + alphabet + "]$");
+            text = text ?? "";
+            for (int i = 0; i < text.Length; i++)
+            {
+                int size = char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]) ? 2 : 1;
+                if (char.IsLetter(text, i) && !allowed.IsMatch(text.Substring(i, size))) return false;
+                i += size - 1;
+            }
+            return true;
+        }
+
+        internal static string Tongue(string text, string language)
+        {
+            if (Reads(text, "en")) return null;
+            string code = Brain.LanguageCode(language);
+            if (code != "en" && Reads(text, code)) return code;
+            for (int i = 0; i < Scripts.GetLength(0); i++)
+            {
+                code = Scripts[i, 0].Split(' ')[0];
+                if (Reads(text, code)) return code;
+            }
+            return "";
+        }
+
+        internal static string Missing(string code, string language)
+        {
+            switch (code)
+            {
+                case "ru": return "Добавь голос для этого языка в Mainframe: CUSTOM LOCAL.";
+                case "uk": return "Додай голос для цієї мови в Mainframe: CUSTOM LOCAL.";
+                case "be": return "Дадай голас для гэтай мовы ў Mainframe: CUSTOM LOCAL.";
+                case "bg": return "Добави глас за този език в Mainframe: CUSTOM LOCAL.";
+                case "mk": return "Додај глас за овој јазик во Mainframe: CUSTOM LOCAL.";
+                case "kk": return "Осы тілге арналған дауысты Mainframe ішіндегі CUSTOM LOCAL бөлімінде қос.";
+                case "mn": return "Энэ хэлний дуу хоолойг Mainframe доторх CUSTOM LOCAL хэсэгт нэмээрэй.";
+                case "sr": return "Додај глас за овај језик у Mainframe: CUSTOM LOCAL.";
+                case "uz": return "Mainframe ichidagi CUSTOM LOCAL bo‘limida bu til uchun ovoz qo‘shing.";
+                case "az": return "Mainframe daxilində CUSTOM LOCAL bölməsində bu dil üçün səs əlavə edin.";
+                case "el": return "Πρόσθεσε φωνή για αυτή τη γλώσσα στο Mainframe: CUSTOM LOCAL.";
+                case "ka": return "ამ ენის ხმა დაამატე Mainframe-ის CUSTOM LOCAL განყოფილებაში.";
+                case "hy": return "Այս լեզվի ձայնն ավելացրու Mainframe-ի CUSTOM LOCAL բաժնում։";
+                case "am": return "ለዚህ ቋንቋ ድምፅ በMainframe ውስጥ ባለው CUSTOM LOCAL ላይ ያክሉ።";
+                case "th": return "เพิ่มเสียงสำหรับภาษานี้ใน CUSTOM LOCAL ของ Mainframe";
+                case "lo": return "ເພີ່ມສຽງສຳລັບພາສານີ້ໃນ CUSTOM LOCAL ຂອງ Mainframe";
+                case "km": return "បន្ថែមសំឡេងសម្រាប់ភាសានេះក្នុង CUSTOM LOCAL នៅ Mainframe។";
+                case "my": return "ဒီဘာသာစကားအတွက် အသံကို Mainframe ရှိ CUSTOM LOCAL မှာ ထည့်ပါ။";
+                case "zh": return language == "Traditional Chinese" ? "在 Mainframe 的 CUSTOM LOCAL 中加入這個語言的語音。" : "在 Mainframe 的 CUSTOM LOCAL 中添加这个语言的语音。";
+                case "ja": return "Mainframe の CUSTOM LOCAL で、この言語の音声を追加してね。";
+                case "ko": return "Mainframe의 CUSTOM LOCAL에서 이 언어의 음성을 추가해 줘.";
+                case "hi": return "इस भाषा की आवाज़ Mainframe के CUSTOM LOCAL में जोड़ें।";
+                case "ne": return "यो भाषाको आवाज Mainframe को CUSTOM LOCAL मा थप्नुहोस्।";
+                case "mr": return "या भाषेचा आवाज Mainframe मधील CUSTOM LOCAL मध्ये जोडा.";
+                case "bn": return "এই ভাষার কণ্ঠ Mainframe-এর CUSTOM LOCAL-এ যোগ করুন।";
+                case "gu": return "આ ભાષાનો અવાજ Mainframe ના CUSTOM LOCAL માં ઉમેરો.";
+                case "pa": return "ਇਸ ਭਾਸ਼ਾ ਦੀ ਆਵਾਜ਼ Mainframe ਦੇ CUSTOM LOCAL ਵਿੱਚ ਜੋੜੋ।";
+                case "ta": return "இந்த மொழிக்கான குரலை Mainframe இல் CUSTOM LOCAL பகுதியில் சேர்க்கவும்.";
+                case "te": return "ఈ భాష స్వరాన్ని Mainframe లోని CUSTOM LOCAL లో జోడించండి.";
+                case "kn": return "ಈ ಭಾಷೆಯ ಧ್ವನಿಯನ್ನು Mainframe ನ CUSTOM LOCAL ನಲ್ಲಿ ಸೇರಿಸಿ.";
+                case "ml": return "ഈ ഭാഷയുടെ ശബ്ദം Mainframe-ലെ CUSTOM LOCAL-ൽ ചേർക്കൂ.";
+                case "ar": return "أضف صوتًا لهذه اللغة في Mainframe ضمن CUSTOM LOCAL.";
+                case "ur": return "اس زبان کی آواز Mainframe میں CUSTOM LOCAL کے تحت شامل کریں۔";
+                case "fa": return "صدای این زبان را در بخش CUSTOM LOCAL در Mainframe اضافه کن.";
+                case "he": return "הוסף קול לשפה הזאת ב-Mainframe תחת CUSTOM LOCAL.";
+                case "fr": return "Ajoute une voix pour cette langue dans CUSTOM LOCAL, dans Mainframe.";
+                case "es": return "Añade una voz para este idioma en CUSTOM LOCAL, en Mainframe.";
+                case "de": return "Füge in Mainframe unter CUSTOM LOCAL eine Stimme für diese Sprache hinzu.";
+                case "it": return "Aggiungi una voce per questa lingua in CUSTOM LOCAL, in Mainframe.";
+                case "pt": return "Adiciona uma voz para este idioma em CUSTOM LOCAL, no Mainframe.";
+                case "ca": return "Afegeix una veu per a aquesta llengua a CUSTOM LOCAL, a Mainframe.";
+                case "gl": return "Engade unha voz para esta lingua en CUSTOM LOCAL, en Mainframe.";
+                case "eu": return "Gehitu hizkuntza honetarako ahots bat Mainframe-ko CUSTOM LOCAL atalean.";
+                case "nl": return "Voeg een stem voor deze taal toe via CUSTOM LOCAL in Mainframe.";
+                case "af": return "Voeg 'n stem vir hierdie taal by CUSTOM LOCAL in Mainframe.";
+                case "sv": return "Lägg till en röst för det här språket under CUSTOM LOCAL i Mainframe.";
+                case "da": return "Tilføj en stemme til dette sprog under CUSTOM LOCAL i Mainframe.";
+                case "no": return "Legg til en stemme for dette språket under CUSTOM LOCAL i Mainframe.";
+                case "is": return "Bættu við rödd fyrir þetta tungumál undir CUSTOM LOCAL í Mainframe.";
+                case "fi": return "Lisää tämän kielen ääni Mainframen CUSTOM LOCAL -kohdassa.";
+                case "et": return "Lisa selle keele hääl Mainframe'i jaotises CUSTOM LOCAL.";
+                case "lv": return "Pievieno šīs valodas balsi Mainframe sadaļā CUSTOM LOCAL.";
+                case "lt": return "Pridėk šios kalbos balsą Mainframe skiltyje CUSTOM LOCAL.";
+                case "pl": return "Dodaj głos dla tego języka w Mainframe, w sekcji CUSTOM LOCAL.";
+                case "cs": return "Přidej hlas pro tento jazyk v Mainframe v části CUSTOM LOCAL.";
+                case "sk": return "Pridaj hlas pre tento jazyk v Mainframe v časti CUSTOM LOCAL.";
+                case "hu": return "Adj hozzá hangot ehhez a nyelvhez a Mainframe CUSTOM LOCAL részében.";
+                case "sl": return "Dodaj glas za ta jezik v razdelku CUSTOM LOCAL v Mainframe.";
+                case "hr": return "Dodaj glas za ovaj jezik u Mainframe, pod CUSTOM LOCAL.";
+                case "bs": return "Dodaj glas za ovaj jezik u Mainframe, pod CUSTOM LOCAL.";
+                case "sq": return "Shto një zë për këtë gjuhë te CUSTOM LOCAL në Mainframe.";
+                case "ro": return "Adaugă o voce pentru această limbă în CUSTOM LOCAL, în Mainframe.";
+                case "ga": return "Cuir guth don teanga seo leis faoi CUSTOM LOCAL in Mainframe.";
+                case "cy": return "Ychwanega lais ar gyfer yr iaith hon o dan CUSTOM LOCAL yn Mainframe.";
+                case "mt": return "Żid vuċi għal din il-lingwa taħt CUSTOM LOCAL f'Mainframe.";
+                case "tr": return "Mainframe içindeki CUSTOM LOCAL bölümünden bu dil için bir ses ekle.";
+                case "vi": return "Thêm giọng nói cho ngôn ngữ này trong CUSTOM LOCAL ở Mainframe.";
+                case "id": return "Tambahkan suara untuk bahasa ini di CUSTOM LOCAL dalam Mainframe.";
+                case "ms": return "Tambah suara untuk bahasa ini di CUSTOM LOCAL dalam Mainframe.";
+                case "jv": return "Tambah swara kanggo basa iki ing CUSTOM LOCAL ing Mainframe.";
+                case "fil": return "Magdagdag ng boses para sa wikang ito sa CUSTOM LOCAL sa Mainframe.";
+                case "sw": return "Ongeza sauti ya lugha hii kwenye CUSTOM LOCAL katika Mainframe.";
+                case "ha": return "Ƙara murya don wannan harshe a CUSTOM LOCAL cikin Mainframe.";
+                case "yo": return "Fi ohùn fún èdè yìí kún CUSTOM LOCAL nínú Mainframe.";
+                case "ig": return "Tinye olu maka asụsụ a na CUSTOM LOCAL n'ime Mainframe.";
+                case "zu": return "Faka izwi lalolu limi ku-CUSTOM LOCAL ku-Mainframe.";
+                case "xh": return "Yongeza ilizwi lolu lwimi kwi-CUSTOM LOCAL kwi-Mainframe.";
+                case "so": return "Ku dar codka luqaddan qaybta CUSTOM LOCAL ee Mainframe.";
+                default: return "Add a voice for this language under CUSTOM LOCAL in Mainframe.";
+            }
+        }
+    }
+
+    internal static class WindowsVoice
+    {
+        internal static Func<List<KeyValuePair<string, string>>> Catalog = Voices;
+        internal static Func<string, string, byte[]> Run = Say;
+
+        internal static byte[] Speak(string language, string text)
+        {
+            if (string.IsNullOrEmpty(language) || language == "en" || !VoiceLanguage.Reads(text, language)) return null;
+            try
+            {
+                foreach (KeyValuePair<string, string> voice in Catalog())
+                {
+                    if (VoiceLanguage.Code(voice.Value) != language) continue;
+                    try
+                    {
+                        byte[] wav = Run(voice.Key, Voice.Sayable(text));
+                        if (wav != null && Voice.Seconds(wav) > 0) return VoiceFx.Styled(wav, text);
+                    }
+                    catch (Exception) { }
+                }
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        private static List<KeyValuePair<string, string>> Voices()
+        {
+            List<KeyValuePair<string, string>> voices = new List<KeyValuePair<string, string>>();
+            try
+            {
+                foreach (Windows.Media.SpeechSynthesis.VoiceInformation voice in Windows.Media.SpeechSynthesis.SpeechSynthesizer.AllVoices)
+                    voices.Add(new KeyValuePair<string, string>("winrt:" + voice.Id, voice.Language));
+            }
+            catch (Exception) { }
+            try
+            {
+                using (System.Speech.Synthesis.SpeechSynthesizer synth = new System.Speech.Synthesis.SpeechSynthesizer())
+                    foreach (System.Speech.Synthesis.InstalledVoice voice in synth.GetInstalledVoices())
+                        if (voice.Enabled) voices.Add(new KeyValuePair<string, string>("sapi:" + voice.VoiceInfo.Name, voice.VoiceInfo.Culture.Name));
+            }
+            catch (Exception) { }
+            return voices;
+        }
+
+        private static byte[] Say(string name, string text)
+        {
+            if (name.StartsWith("winrt:", StringComparison.Ordinal))
+            {
+                using (Windows.Media.SpeechSynthesis.SpeechSynthesizer synth = new Windows.Media.SpeechSynthesis.SpeechSynthesizer())
+                {
+                    Windows.Media.SpeechSynthesis.VoiceInformation picked = null;
+                    foreach (Windows.Media.SpeechSynthesis.VoiceInformation voice in Windows.Media.SpeechSynthesis.SpeechSynthesizer.AllVoices)
+                        if (voice.Id == name.Substring(6)) { picked = voice; break; }
+                    if (picked == null) return null;
+                    synth.Voice = picked;
+                    using (Windows.Media.SpeechSynthesis.SpeechSynthesisStream sound = synth.SynthesizeTextToStreamAsync(text).AsTask().GetAwaiter().GetResult())
+                    using (Stream input = sound.AsStreamForRead())
+                    using (MemoryStream copy = new MemoryStream())
+                    {
+                        input.CopyTo(copy);
+                        return Voice.Wave(VoiceServer.Sound(copy.ToArray(), "audio/wav", "Windows"), YourVoice.Rate);
+                    }
+                }
+            }
+            using (System.Speech.Synthesis.SpeechSynthesizer synth = new System.Speech.Synthesis.SpeechSynthesizer())
+            using (MemoryStream pcm = new MemoryStream())
+            {
+                synth.SelectVoice(name.Substring(5));
+                synth.SetOutputToAudioStream(pcm, new System.Speech.AudioFormat.SpeechAudioFormatInfo(YourVoice.Rate, System.Speech.AudioFormat.AudioBitsPerSample.Sixteen, System.Speech.AudioFormat.AudioChannel.Mono));
+                synth.Speak(text);
+                byte[] bytes = pcm.ToArray();
+                short[] samples = new short[bytes.Length / 2];
+                Buffer.BlockCopy(bytes, 0, samples, 0, samples.Length * 2);
+                return Voice.Wave(samples, YourVoice.Rate);
+            }
+        }
+    }
+
     internal sealed class FreeStyle
     {
         internal readonly string Name;
@@ -2201,6 +2517,7 @@ namespace CapriDesktop
 
         internal byte[] Speak(string text)
         {
+            if (!VoiceLanguage.Reads(text, "en")) throw new VoiceException(VoiceLanguage.Missing(VoiceLanguage.Tongue(text, Brain.Language), Brain.Language));
             FreeStyle style = Style;
             int pitch = VoiceFx.Pitch, speed = VoiceFx.Speed, robot = VoiceFx.Robot, glitch = VoiceFx.Glitch, rate;
             VoiceFx.Layering layers = VoiceFx.Layers;
@@ -2419,6 +2736,8 @@ namespace CapriDesktop
         // Her free voice's folder, where sherpa-onnx is, and the folder models from an archive are unpacked into. Set at startup.
         internal static string Engine;
         internal static string Shelf;
+        internal delegate short[] Generate(string folder, string language, string speaker, string text, out int rate);
+        internal static Generate Run;
         private static readonly object gate = new object();
         private static IntPtr tts;
         private static string opened;
@@ -2471,6 +2790,93 @@ namespace CapriDesktop
 
         // A folder as they typed or pasted it. Explorer's "Copy as path" puts it in quotes.
         internal static string Clean(string folder) { return (folder ?? "").Trim().Trim('"').Trim(); }
+
+        [DataContract]
+        private sealed class Piper
+        {
+            [DataMember(Name = "language")] public PiperLanguage Language;
+            [DataMember(Name = "espeak")] public PiperSpeech Speech;
+        }
+
+        [DataContract]
+        private sealed class PiperLanguage
+        {
+            [DataMember(Name = "code")] public string Code;
+        }
+
+        [DataContract]
+        private sealed class PiperSpeech
+        {
+            [DataMember(Name = "voice")] public string Voice;
+        }
+
+        internal static string Language(string folder, string language)
+        {
+            folder = Clean(folder);
+            string kind = Kind(folder);
+            if (kind == null) return "";
+            if (kind == "kokoro")
+            {
+                string code = VoiceLanguage.Code(string.IsNullOrEmpty(language) ? "en-us" : language);
+                if (code == "en") return code;
+                foreach (string lexicon in Directory.GetFiles(folder, "lexicon*.txt"))
+                    if (Regex.IsMatch(Path.GetFileName(lexicon), "(?:^|[-_])" + code + "(?:[-_.]|$)", RegexOptions.IgnoreCase)) return code;
+                return "";
+            }
+            if (kind != "vits") return "en";
+            string model = Model(folder);
+            foreach (string json in new[] { model + ".json", Path.Combine(folder, "config.json") })
+            {
+                try
+                {
+                    if (!File.Exists(json) || new FileInfo(json).Length > 1 << 20) continue;
+                    Piper piper = Voice.Read<Piper>(File.ReadAllBytes(json));
+                    string code = piper == null || piper.Language == null ? "" : VoiceLanguage.Code(piper.Language.Code);
+                    if (code.Length == 0 && piper != null && piper.Speech != null) code = VoiceLanguage.Code(piper.Speech.Voice);
+                    if (code.Length > 0) return code;
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                catch (SerializationException) { }
+            }
+            foreach (string name in new[] { Path.GetFileName(folder.TrimEnd('\\', '/')), Path.GetFileName(model) })
+            {
+                Match named = Regex.Match(name, @"^(?:vits-(?:piper-)?)?([a-z]{2,3})[_-][a-z]{2}(?:[-_.]|$)", RegexOptions.IgnoreCase);
+                if (named.Success) return VoiceLanguage.Code(named.Groups[1].Value);
+            }
+            return "";
+        }
+
+        internal static List<string> Find(string language, string[] folders, string[] languages)
+        {
+            List<string> found = new List<string>();
+            if (string.IsNullOrEmpty(language) || language == "en") return found;
+            for (int i = 0; i < folders.Length; i++) Match(found, folders[i], languages[i], language);
+            try
+            {
+                if (string.IsNullOrEmpty(Shelf) || !Directory.Exists(Shelf)) return found;
+                string[] saved = Directory.GetDirectories(Shelf);
+                Array.Sort(saved, StringComparer.OrdinalIgnoreCase);
+                foreach (string folder in saved)
+                    if (!folder.EndsWith(".new", StringComparison.OrdinalIgnoreCase)) Match(found, folder, language, language);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return found;
+        }
+
+        private static void Match(List<string> found, string folder, string configured, string language)
+        {
+            if (string.IsNullOrEmpty(folder)) return;
+            try
+            {
+                folder = Clean(folder);
+                if (!found.Exists(delegate(string saved) { return string.Equals(saved, folder, StringComparison.OrdinalIgnoreCase); }) && Language(folder, configured) == language) found.Add(folder);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (ArgumentException) { }
+        }
 
         // Its name on her free voice button: its folder's, without sherpa-onnx's "vits-piper-" or "sherpa-onnx-" in front.
         // Anything typed gets a name, even what's no path at all, as it shows when she starts.
@@ -2545,6 +2951,8 @@ namespace CapriDesktop
         // number, where one past its last speaker gets its first, or for Pocket TTS the clip whose voice it copies.
         internal static short[] Speak(string folder, string lang, string voice, string text, out int rate)
         {
+            if (!VoiceLanguage.Reads(text, Language(folder, lang))) throw new VoiceException(VoiceLanguage.Missing(VoiceLanguage.Tongue(text, Brain.Language), Brain.Language));
+            if (Run != null) return Run(folder, lang, voice, text, out rate);
             lock (gate)
             {
                 string kind = Open(folder, lang);
@@ -2991,12 +3399,30 @@ namespace CapriDesktop
         {
             Voiced(number);
             int tongue = Array.IndexOf(Tongues, Brain.LanguageCode(Brain.Language));
-            string rest = ",\"voice\":\"capri\",\"language\":\"" + (tongue >= 0 ? Languages[tongue] : "english") + "\",\"seed\":7,\"max_new_tokens\":512,\"response_format\":\"wav\"}";
+            string language = tongue >= 0 ? Languages[tongue] : "english";
+            Func<string, int, string> body = delegate(string piece, int seed)
+            {
+                return "{\"input\":" + Voice.Quote(piece) + ",\"voice\":\"capri\",\"language\":\"" + language + "\",\"seed\":" + seed + ",\"max_new_tokens\":512,\"response_format\":\"wav\"}";
+            };
             int pitch = VoiceFx.Pitch, speed = VoiceFx.Speed, robot = VoiceFx.HdRobot, glitch = VoiceFx.HdGlitch;
             VoiceFx.Layering layers = VoiceFx.Layers;
             List<short> said = new List<short>();
             int hertz = 24000;
-            foreach (string piece in Pieces(Voice.Sayable(text))) said.AddRange(Voice.Samples(Ask(number, "/v1/audio/speech", "{\"input\":" + Voice.Quote(piece) + rest), out hertz));
+            foreach (string piece in Pieces(Voice.Sayable(text)))
+            {
+                short[] made = Voice.Samples(Ask(number, "/v1/audio/speech", body(piece, 7)), out hertz);
+                // Like a voice server's, a piece far shorter than its words could take was cut off, which sounds like her voice
+                // stopping mid-reply while the text goes on (ticket 35: Ashy, on headphones with her HD voice). It's asked for once
+                // more with another seed, since the same seed makes the same sound, and the longer one is kept.
+                if (VoiceServer.Clipped(piece, made.Length, hertz))
+                {
+                    short[] again = Voice.Samples(Ask(number, "/v1/audio/speech", body(piece, 8)), out hertz);
+                    Brain.Log("HD voice", -1, "Sound for " + VoiceServer.Letters(piece) + " letters came back as " + (made.Length / (double)hertz).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
+                        + " s, so she asked again and got " + (again.Length / (double)hertz).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s.");
+                    if (again.Length > made.Length) made = again;
+                }
+                said.AddRange(made);
+            }
             short[] samples = said.ToArray();
             if (!VoiceFx.Plain(pitch, speed, robot, glitch, layers)) samples = VoiceFx.Restyled(samples, hertz, pitch, speed, robot, glitch, VoiceFx.Seed(text), layers);
             byte[] wav = Voice.Wave(samples, hertz);
@@ -3456,6 +3882,17 @@ namespace CapriDesktop
 
         private static string Slow(string name) { return name + " took over " + (Patience / 1000.0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + " s to answer."; }
 
+        // Fish Audio's old s1 reads only its own names, in round brackets.
+        internal static string Rounded(string text)
+        {
+            string rounded = Voice.Cue.Replace(text ?? "", delegate(Match cue)
+            {
+                string name = cue.Groups["cue"].Value.ToLowerInvariant();
+                return Regex.IsMatch(name, "^(?:" + Voice.Feelings + ")$") ? "(" + name + ")" : "";
+            });
+            return Regex.Replace(rounded, @"[ \t]{2,}", " ").Trim();
+        }
+
         internal byte[] Speak(string text)
         {
             string url, api, model, speaker, key;
@@ -3468,6 +3905,9 @@ namespace CapriDesktop
                 key = Key;
             }
             bool fish = api == Fish;
+            // Only Fish Audio says her emotion cues, and its old s1 takes its own names in round brackets.
+            if (!fish) text = Voice.Uncued(text);
+            else if (string.Equals(model, "s1", StringComparison.OrdinalIgnoreCase)) text = Rounded(text);
             string name = Name(url, api);
             int pitch = VoiceFx.Pitch, speed = VoiceFx.Speed, robot = VoiceFx.ServerRobot, glitch = VoiceFx.ServerGlitch;
             VoiceFx.Layering layers = VoiceFx.Layers;
@@ -3500,12 +3940,37 @@ namespace CapriDesktop
                     if (!string.IsNullOrEmpty(speaker)) body.Append(",\"voice\":").Append(Voice.Quote(speaker));
                     body.Append(",\"response_format\":\"wav\"}");
                 }
-                said.AddRange(Ask(endpoint, key, fish ? model : null, body.ToString(), name));
+                short[] made = Ask(endpoint, key, fish ? model : null, body.ToString(), name);
+                // A piece far shorter than its words could take was cut off on their side, which sounds like her voice stopping
+                // mid-reply while the text goes on (Mika on Fish Audio). It's asked for once more and the longer one kept.
+                if (Clipped(piece, made.Length))
+                {
+                    short[] again = Ask(endpoint, key, fish ? model : null, body.ToString(), name);
+                    Brain.Log(name, -1, "Sound for " + Letters(piece) + " letters came back as " + (made.Length / (double)YourVoice.Rate).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
+                        + " s, so she asked again and got " + (again.Length / (double)YourVoice.Rate).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s.");
+                    if (again.Length > made.Length) made = again;
+                }
+                said.AddRange(made);
             }
             short[] samples = said.ToArray();
             if (samples.Length == 0) throw new VoiceException(name + " sent back no sound.");
             if (!VoiceFx.Plain(pitch, speed, robot, glitch, layers)) samples = VoiceFx.Restyled(samples, YourVoice.Rate, pitch, speed, robot, glitch, VoiceFx.Seed(text), layers);
             return Voice.Wave(samples, YourVoice.Rate);
+        }
+
+        // Sound for a piece is cut off when it's quicker than 20 letters a second, faster than anyone talks. Pieces under 40
+        // letters are left alone, since a few words can be said quickly.
+        internal static bool Clipped(string piece, int samples, int rate = YourVoice.Rate)
+        {
+            int letters = Letters(piece);
+            return letters >= 40 && samples < (long)letters * rate / 20;
+        }
+
+        internal static int Letters(string piece)
+        {
+            int count = 0;
+            foreach (char c in Voice.Uncued(piece ?? "")) if (char.IsLetterOrDigit(c)) count++;
+            return count;
         }
 
         // `model` goes in a header, where Fish Audio's API takes it. `name` is what her notes call the server.
@@ -3647,7 +4112,7 @@ namespace CapriDesktop
                     noted = problem;
                     trouble(problem);
                 }
-                return fallback(words);
+                return fallback(Voice.Uncued(words));
             };
         }
     }

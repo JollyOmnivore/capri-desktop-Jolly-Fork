@@ -29,11 +29,11 @@ internal static class Chains
 
     private static string Selected(string url, string tool = "open_website", bool multiple = false)
     {
-        object call = new { id = "selected-link", type = "function", function = new { name = tool, arguments = JsonSerializer.Serialize(new { site = url }) } };
+        object call = new { id = "selected-link", type = "function", function = new { name = tool, arguments = JsonSerializer.Serialize(tool == "web_search" ? (object)new { query = "official project" } : new { site = url }) } };
         return JsonSerializer.Serialize(new { choices = new[] { new { message = new { role = "assistant", content = "", tool_calls = multiple ? new[] { call, call } : new[] { call } }, finish_reason = "tool_calls" } } });
     }
 
-    private static async Task Case(string name, string request, string selection, int requests, bool opens, bool follow = true, bool holdSearch = false, bool holdOpen = false, bool failSearch = false, bool cancel = false)
+    private static async Task Case(string name, string request, string selection, int requests, bool opens, bool follow = true, bool holdSearch = false, bool holdOpen = false, bool failSearch = false, bool cancel = false, bool planning = false)
     {
         int searchCount = 0;
         List<string> opened = new List<string>();
@@ -54,6 +54,7 @@ internal static class Chains
         Brain.GetField("WorkGateway", Members).SetValue(null, "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/v1");
         Brain.GetField("GatewayKeyPrefix", Members).SetValue(null, "fixture_");
         object model = Activator.CreateInstance(Brain, true);
+        Brain.GetField("OwnSteps", Members).SetValue(model, planning);
         Brain.GetField("Model", Members).SetValue(model, "fixture-model");
         Brain.GetField("Remote", Members).SetValue(model, Activator.CreateInstance(Cloud, Members, null, new object[] { "fixture_fake-key", "fixture-model" }, null));
         FieldInfo act = Brain.GetField("Act", Members);
@@ -82,16 +83,18 @@ internal static class Chains
                 byte[] body = new byte[int.Parse(size)];
                 await stream.ReadExactlyAsync(body, timeout.Token);
                 using JsonDocument json = JsonDocument.Parse(body);
-                bool choosing = follow && index == 0;
+                bool choosing = follow && index == (planning ? 1 : 0);
+                bool firstPlan = planning && index == 0;
                 if (choosing)
                 {
                     JsonElement tools = json.RootElement.GetProperty("tools");
                     Check(tools.GetArrayLength() == 1 && tools[0].GetProperty("function").GetProperty("name").GetString() == "open_website", "follow-up offers only the browser-open tool");
                     Check(json.RootElement.GetProperty("messages")[1].GetProperty("content").GetString().Contains(Link), "follow-up receives actual search results before choosing a link");
                 }
+                else if (firstPlan) Check(json.RootElement.GetProperty("tools").GetArrayLength() > 1, "new planner starts with its available tools");
                 else Check(!json.RootElement.TryGetProperty("tools", out _), "final answer cannot trigger more tools");
                 if (cancel) { Call(Brain, model, "Cancel"); break; }
-                string response = choosing ? selection : "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"The official project is at https://example.com/official-project.\"}}]}";
+                string response = firstPlan ? Selected(Link, "web_search") : choosing ? selection : "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"The official project is at https://example.com/official-project.\"}}]}";
                 byte[] payload = Encoding.UTF8.GetBytes(response);
                 byte[] head = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + payload.Length + "\r\nConnection: close\r\n\r\n");
                 await stream.WriteAsync(head, timeout.Token);
@@ -133,6 +136,9 @@ internal static class Chains
             await Case("search permission is respected", request, null, 0, false, holdSearch: true);
             await Case("browser permission is respected after searching", request, Selected(Link), 1, false, holdOpen: true);
             await Case("cancelling during selection prevents opening a page", request, Selected(Link), 1, false, cancel: true);
+            await Case("new planner retains bounded search-to-open", request, Selected(Link), 3, true, planning: true);
+            await Case("new planner cannot open invented links from search excerpts", request, Selected("https://evil.example/"), 2, false, planning: true);
+            await Case("new planner keeps text-only searches from triggering more tools", "Search the web for the project and do not open anything", null, 2, false, follow: false, planning: true);
             Console.WriteLine(checks + " search-chain checks passed.");
             return checks;
         }

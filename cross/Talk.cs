@@ -168,6 +168,7 @@ namespace CapriDesktop
     {
         internal const double Tall = 44;
         internal event Action<string> Submitted;
+        internal event Action Typed;
         private readonly TextBox input = new TextBox();
         private readonly TextBlock prompt;
 
@@ -180,7 +181,8 @@ namespace CapriDesktop
             prompt = new TextBlock { Text = "> you:", FontFamily = Look.Mono, FontStyle = FontStyle.Italic, FontSize = Sheet.Type, Foreground = new SolidColorBrush(Look.Dim), VerticalAlignment = VerticalAlignment.Center };
             input.FontFamily = Look.Mono;
             input.FontSize = Sheet.Type;
-            input.MaxLength = 240;
+            // No limit, so her brain reads a long request whole.
+            input.MaxLength = 0;
             input.BorderThickness = new Thickness(0);
             input.Padding = new Thickness(0);
             input.MinHeight = 0;
@@ -192,6 +194,7 @@ namespace CapriDesktop
             foreach (string key in new[] { "TextControlForeground", "TextControlForegroundPointerOver", "TextControlForegroundFocused" }) input.Resources[key] = ink;
             input.Resources["TextControlSelectionHighlightColor"] = new SolidColorBrush(Look.Neon);
             input.CaretBrush = new SolidColorBrush(Look.Neon);
+            input.TextChanged += delegate { if (Typed != null) Typed(); };
             input.KeyDown += delegate(object sender, KeyEventArgs e)
             {
                 if (e.Key == Key.Enter) { e.Handled = true; Submit(); }
@@ -217,7 +220,7 @@ namespace CapriDesktop
             set
             {
                 input.PasswordChar = value ? '\u2022' : '\0';
-                input.MaxLength = value ? 200 : 240;
+                input.MaxLength = value ? 200 : 0;
                 prompt.Text = value ? "> key:" : "> you:";
                 if (value) input.Text = "";
             }
@@ -834,6 +837,7 @@ namespace CapriDesktop
         internal Talk(Pet pet)
         {
             this.pet = pet;
+            Typer.Typed += pet.Typed;
             Typer.Submitted += delegate(string text)
             {
                 if (asked != null) { Action<string> to = asked; asked = null; Typer.Hide(); to(text); return; }
@@ -855,12 +859,17 @@ namespace CapriDesktop
         internal double Pace { get { return pace; } }
         internal string Shown { get { return reply == null ? "" : reply.Substring(0, Math.Min(reply.Length, Math.Max(0, Bubble.Sheet.Revealed))); } }
         internal bool Typing { get { return Typer.IsVisible; } }
+        // When her voice for this reply ends, and whether she's done with it: not thinking, the reply shown in full and her voice
+        // over, with her typing box open or not.
+        private double audioEnd;
+        internal bool Finished { get { return !thinking && (reply == null || replyDone >= 0) && pet.Now >= audioEnd; } }
         internal bool Done { get { return reply != null && replyDone >= 0; } }
         internal bool Quiet { get { return reply == null && !thinking && !Typer.IsVisible && !pet.Dictating; } }
         internal Control Face { get { return Bubble.Sheet; } }
 
         internal void Open()
         {
+            pet.Typed();
             asked = null;
             secretTo = null;
             if (Typer.Secret) Typer.Secret = false;
@@ -894,6 +903,7 @@ namespace CapriDesktop
 
         internal void Thinking(string heard)
         {
+            pet.Answered();
             if (pet.Away) return;
             reply = null;
             thinking = true;
@@ -906,8 +916,10 @@ namespace CapriDesktop
         // sight: it would float there with nobody under it, and stop her pop-ins until she's shown.
         internal void Answer(string heard, string answer, double seconds = 0)
         {
+            pet.Answered();
             if (pet.Away) return;
             reply = answer;
+            audioEnd = pet.Now + Math.Max(0, seconds);
             thinking = false;
             pace = seconds < 0.2 ? LettersPerSecond : Math.Max(8, answer.Length / seconds);
             replyStart = pet.Now;

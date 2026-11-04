@@ -30,6 +30,8 @@ namespace CapriDesktop
     {
         internal double X, Y, ToX, ToY, RestUntil, SplitAt, PrintX, PrintY, Born, Phase, LineUntil;
         internal bool Left, Fetching;
+        internal bool Returning;
+        internal string Agent;
         internal string Line;
         internal Bitmap LineCard;
         internal CloneNote Carrying;
@@ -81,6 +83,7 @@ namespace CapriDesktop
         internal CloneBody Nabber;
         internal int Pending;
         internal bool Multiplying;
+        internal bool Watching;
         internal double SpawnX, SpawnY, HaulAt;
         // Where on her screen windows may land, in their room: clear of the taskbar. All of it unless her window says.
         internal double WorkLeft, WorkTop, WorkRight, WorkBottom;
@@ -125,6 +128,23 @@ namespace CapriDesktop
 
         internal bool Walking(CloneBody body, double now) { return now >= body.RestUntil && (body.X != body.ToX || body.Y != body.ToY); }
 
+        internal void Agent(string key, bool start, double x, double y, double now)
+        {
+            CloneBody body = Bodies.Find(delegate(CloneBody item) { return item.Agent == key; });
+            if (start)
+            {
+                if (body != null) return;
+                Spawn(x, y, now);
+                Bodies[Bodies.Count - 1].Agent = key;
+            }
+            else if (body != null)
+            {
+                body.Returning = true;
+                body.RestUntil = 0;
+                body.ToX = x; body.ToY = y;
+            }
+        }
+
         // Moves them all a step and says where the cursor should go, while one of them has hold of it.
         internal Point? Tick(double now, double passed, bool keepingUp, bool handsFree, Point cursor, bool hauling = false)
         {
@@ -140,7 +160,14 @@ namespace CapriDesktop
                     }
             }
             foreach (CloneBody body in Bodies) Move(body, now, passed);
+            for (int i = Bodies.Count - 1; i >= 0; i--)
+                if (Bodies[i].Returning && Math.Abs(Bodies[i].X - Bodies[i].ToX) < 1 && Math.Abs(Bodies[i].Y - Bodies[i].ToY) < 1)
+                {
+                    if (Bodies[i].LineCard != null) Bodies[i].LineCard.Dispose();
+                    Bodies.RemoveAt(i);
+                }
             Prints.RemoveAll(delegate(ClonePrint print) { return now - print.Born > PrintLife; });
+            if (Watching) return null;
             foreach (CloneNote note in Notes)
                 if (note.BarFrom >= 0 && now - note.BarFrom >= note.BarFor)
                 {
@@ -164,7 +191,7 @@ namespace CapriDesktop
         }
 
         // They run at the cursor or a window they're after, and slow down hauling one.
-        private double Speed(CloneBody body) { return body == Nabber || (body.Hauling != null && !body.Hauling.Holding) ? Dash : body.Hauling != null ? Heavy : Pace; }
+        private double Speed(CloneBody body) { return body.Returning || body == Nabber || (body.Hauling != null && !body.Hauling.Holding) ? Dash : body.Hauling != null ? Heavy : Pace; }
 
         private void Move(CloneBody body, double now, double passed)
         {
@@ -192,6 +219,7 @@ namespace CapriDesktop
 
         private void Arrived(CloneBody body, double now)
         {
+            if (body.Returning) return;
             if (body == Nabber || body.Hauling != null) return;
             if (body.Fetching)
             {
@@ -480,6 +508,11 @@ namespace CapriDesktop
             Swarm.SpawnY = at.Y - room.Y;
             Swarm.Pending = (int)Math.Min(int.MaxValue, (long)Swarm.Pending + count);
             Swarm.Multiplying |= multiplying;
+        }
+
+        internal void Agent(string key, bool start, Point at)
+        {
+            Swarm.Agent(key, start, at.X - room.X, at.Y - room.Y, clock.Elapsed.TotalSeconds);
         }
 
         internal void Pin(string text, Point at)
@@ -829,6 +862,33 @@ namespace CapriDesktop
 
     internal sealed partial class Companion
     {
+        private CloneWindow huskClones;
+
+        private void HuskClonesOff()
+        {
+            CloneWindow closing = huskClones;
+            huskClones = null;
+            if (closing != null) closing.Close();
+        }
+
+        private void HuskClone(string key, bool start)
+        {
+            Point centre = new Point(anchor.X + Width / 2, anchor.Y + Height / 2);
+            if (huskClones == null && start)
+            {
+                CloneWindow opened = new CloneWindow(Screen.FromPoint(centre).Bounds, clock, idle, walk, grin, glitch, preferences.Size, Width, random.Next());
+                opened.Swarm.Watching = true;
+                opened.Failed = HuskClonesOff;
+                opened.Cleared = HuskClonesOff;
+                opened.Ticked = delegate { if (huskClones == opened && opened.Swarm.Bodies.Count == 0) HuskClonesOff(); };
+                huskClones = opened;
+                opened.Agent(key, true, centre);
+                opened.Open(clock.Elapsed.TotalSeconds);
+                return;
+            }
+            if (huskClones != null) huskClones.Agent(key, start, centre);
+        }
+
         private const string CloneAsk = "You've cloned yourself on their desktop, and there are {0} of you on screen right now. Write what you all say to each other next, the way you really talk: funny, a bit rude, arguing over who's the real one or what to do with their PC. Two to four lines, each under ten words. Put each line on its own row as its speaker's number, a colon, then the words, like 1: words, with numbers from 1 to {0}. Nothing else.";
         private CloneWindow cloneWindow;
         private bool cloneTalking;
@@ -852,7 +912,7 @@ namespace CapriDesktop
         // and the note near her tells anyone who's never met them how to stop it.
         internal bool Upset(int roll)
         {
-            if (preferences.NoUpsetChaos || working != null || hidden || cloneWindow != null || InChat || Computer.Streaming || Computer.GameOpen() != null) return false;
+            if (!preferences.UpsetChaos || working != null || hidden || cloneWindow != null || InChat || Computer.Streaming || Computer.GameOpen() != null) return false;
             upsets++;
             if (roll >= upsets) return false;
             upsets = 0;
@@ -877,13 +937,15 @@ namespace CapriDesktop
                 CloneWindow opened = new CloneWindow(Screen.FromPoint(centre).Bounds, clock, idle, walk, grin, glitch, preferences.Size, Width, random.Next());
                 opened.Failed = ClonesOff;
                 opened.Cleared = ClonesCleared;
-                opened.HandsFree = delegate { return !testing && working == null && !dragging && !pressed; };
+                opened.HandsFree = delegate { return !testing && chaosScreen == null && working == null && !dragging && !pressed; };
                 int own;
                 using (Process self = Process.GetCurrentProcess()) own = self.Id;
                 opened.Grabbable = delegate { return Computer.Streaming || Computer.GameOpen() != null ? null : Ledges.Haulable(own); };
-                opened.Allowed = delegate { return !Computer.Streaming && Computer.GameOpen() == null; };
-                opened.Ticked = CloneTalk;
+                opened.Allowed = delegate { return chaosScreen == null && !Computer.Streaming && Computer.GameOpen() == null; };
+                opened.Ticked = delegate(double tick) { if (cloneWindow != opened) return; CloneTick(tick); ChaosTick(tick); };
                 cloneWindow = opened;
+                chaosScreenAt = now + 40 + random.NextDouble() * 80;
+                chaosScreenUsed = false;
                 cloneTalkAt = now + 3;
                 opened.Open(now);
             }
@@ -897,8 +959,10 @@ namespace CapriDesktop
 
         internal void ClonesOff()
         {
+            ClearIcons();
             cloneTurn++;
             cloneTalking = false;
+            ChaosOff();
             CloneWindow closing = cloneWindow;
             cloneWindow = null;
             if (closing == null) return;
@@ -964,7 +1028,7 @@ namespace CapriDesktop
         private void CloneLine(List<KeyValuePair<int, string>> lines, int at, int turn)
         {
             if (turn != cloneTurn || cloneWindow == null) return;
-            if (working != null || speech != null || talkState != TalkState.Off) { CloneLater(400, lines, at, turn); return; }
+            if (working != null || speech != null || LineBusy || talkState != TalkState.Off) { CloneLater(400, lines, at, turn); return; }
             if (at >= lines.Count)
             {
                 cloneTalking = false;
@@ -990,9 +1054,12 @@ namespace CapriDesktop
                 string trouble = null;
                 if (speak != null) wav = Voiced(speak, free, words, out trouble, false);
                 if (trouble != null) Brain.Log("clones", -1, trouble);
-                Post(delegate
+                Action play = null;
+                play = delegate
                 {
                     if (turn != cloneTurn || cloneWindow == null) return;
+                    if (LineBusy) { ownLines.Enqueue(play); return; }
+                    if (preferences.Silent || Hushed) wav = null;
                     double now = clock.Elapsed.TotalSeconds;
                     double seconds = wav != null ? Voice.Seconds(wav) : 1 + line.Length * 0.06;
                     if (who - 1 < cloneWindow.Swarm.Bodies.Count) cloneWindow.Say(cloneWindow.Swarm.Bodies[who - 1], line, now + seconds + 1);
@@ -1004,7 +1071,8 @@ namespace CapriDesktop
                         PlayVoice(wav);
                     }
                     CloneLater((int)(seconds * 1000) + 300, lines, at + 1, turn);
-                });
+                };
+                Post(play);
             });
         }
     }

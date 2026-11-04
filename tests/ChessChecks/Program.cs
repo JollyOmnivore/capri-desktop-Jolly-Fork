@@ -19,6 +19,12 @@ internal static class Entry
     {
         Folder = Path.GetFullPath(args.Length == 0 ? "out/chess-checks" : args[0]);
         Directory.CreateDirectory(Folder);
+        if (args.Contains("--sync"))
+        {
+            CapriDesktop.Program.Smoke = Folder;
+            CapriDesktop.Program.CheckChess = true;
+            return AppBuilder.Configure<SyncTestApp>().UsePlatformDetect().StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown);
+        }
         try { EngineChecks.Run(); }
         catch (Exception error) { File.WriteAllLines(Path.Combine(Folder, "checks.txt"), EngineChecks.Lines.Append("FAIL " + error)); Console.Error.WriteLine(error); return 1; }
         CapriDesktop.Program.Smoke = Folder;
@@ -44,7 +50,6 @@ internal sealed class ChessTestApp : Application
     public override void OnFrameworkInitializationCompleted()
     {
         desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime;
-        Hands.PleaseRoll = delegate { return 1; };
         pet = new Pet(desktop) { Think = delegate { brainCalls++; throw new Exception("Chess asked an AI model."); } };
         Voice.Playback = delegate { voices++; };
         pet.Show();

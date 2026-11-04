@@ -130,6 +130,8 @@ namespace CapriDesktop
         internal const string Bigger = "Bigger brain models handle jobs like this better. Pick one under BRAIN in Capri Mainframe.";
         internal const string Confused = "Got lost before I could start that job. " + Bigger;
         internal const string Stalled = "Got stuck on that one. " + Bigger;
+        internal const string OffScreen = "That isn't on the screenshot";
+        internal const string NoClick = "Couldn't see where to click, so I stopped.";
         internal const string Exact = "\nTheir exact words: ";
         // Blackwall mode (Bypass all permissions before 0.7.4) is now toggles 8 to 10 of her SECURITY window: with all three on
         // she never stops to check, even to buy or delete, and nothing here refuses a step. True while they're all on. Setting
@@ -409,6 +411,8 @@ namespace CapriDesktop
         [DllImport("user32.dll")] private static extern uint MapVirtualKey(uint code, uint type);
         [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Box box);
         [DllImport("user32.dll")] private static extern int GetWindowThreadProcessId(IntPtr window, out int process);
+        [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr process, int access, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetTokenInformation(IntPtr token, int kind, out int value, int size, out int returned);
         [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr window, StringBuilder text, int size);
 
@@ -1341,12 +1345,49 @@ namespace CapriDesktop
         // A brain sometimes files one of her own tools under Claude's computer tools.
         internal static bool MemberCall(string toolset, string name) { return toolset == "computer" && Toolset.IndexOf("\"name\":\"" + name + "\"", StringComparison.Ordinal) < 0; }
 
+        internal const string AdminWindow = "Couldn't click or type there: that window runs as administrator, and Windows keeps other apps' clicks and keys out of it. Run Capri as administrator too, or do that part yourself.";
+
+        // Windows quietly keeps an app's clicks and keys out of a window that runs as administrator unless the app does too, so
+        // her cursor moved and nothing clicked (ticket 81; Task Manager runs as administrator on most PCs). Only a token that
+        // says so counts: a game's anti-cheat can hide its token, and that game still takes her input.
+        internal static Func<IntPtr, bool> AboveHer = delegate(IntPtr window)
+        {
+            if (window == IntPtr.Zero) return false;
+            if (selfElevated < 0) selfElevated = Elevated(Process.GetCurrentProcess().Id) ? 1 : 0;
+            if (selfElevated == 1) return false;
+            int id;
+            GetWindowThreadProcessId(window, out id);
+            return id != 0 && Elevated(id);
+        };
+        private static int selfElevated = -1;
+
+        private static bool Elevated(int id)
+        {
+            IntPtr process = OpenProcess(0x1000, false, id);
+            if (process == IntPtr.Zero) return false;
+            try
+            {
+                IntPtr token;
+                if (!OpenProcessToken(process, 0x0008, out token)) return false;
+                try
+                {
+                    int elevated, size;
+                    return GetTokenInformation(token, 20, out elevated, 4, out size) && elevated != 0;
+                }
+                finally { CloseHandle(token); }
+            }
+            finally { CloseHandle(process); }
+        }
+
+        private static IntPtr WindowAt(Point at) { return Native.GetAncestor(Native.WindowFromPoint(new Native.Point(at.X, at.Y)), 2); }
+
         internal static string Member(string name, ToolArguments args, Picture shown)
         {
             if (args == null) args = new ToolArguments();
             Point at;
             bool placed = Spot(args.Coordinate, shown, out at);
-            if (args.Coordinate != null && !placed) return "That isn't on the screenshot" + (shown == null ? "." : ", which is " + shown.Size.Width + "x" + shown.Size.Height + ".");
+            if (args.Coordinate != null && !placed) return OffScreen + (shown == null ? "." : ", which is " + shown.Size.Width + "x" + shown.Size.Height + ".");
+            if (name != "cursor_position" && name != "wait" && AboveHer(name == "type" || name == "key" || name == "hold_key" ? Native.GetForegroundWindow() : WindowAt(placed ? at : HerAt))) return AdminWindow;
             short[] held;
             switch (name)
             {
@@ -1696,6 +1737,7 @@ namespace CapriDesktop
             }
             if (tool == "wait_for") return WaitFor(args.Text, args.Seconds);
             if (sight == null || sight.Window == IntPtr.Zero || !IsWindow(sight.Window)) return "There's no app window to use. Open one first.";
+            if (AboveHer(sight.Window)) return AdminWindow;
             Target target = sight.Find(args.Target);
             if (!string.IsNullOrEmpty(args.Target) && target == null) return "There's no number " + args.Target + " on screen.";
             if (tool == "hold_and_press")
@@ -1945,7 +1987,7 @@ namespace CapriDesktop
             if (!lent) Lending(true);
             lent = true;
             PutCursor(at);
-            Steer();
+            Steer(at);
             leftAt = at;
             Thread.Sleep(10);
         }
@@ -2341,6 +2383,7 @@ namespace CapriDesktop
         private int turns;
         private int skips;
         private int streamNudges;
+        private int misses;
         private Picture shown;
         private IntPtr looked;
         private string typed;
@@ -2526,6 +2569,7 @@ namespace CapriDesktop
 
         private string Running()
         {
+            if (misses >= 2) return End("stopped", Computer.NoClick);
             if (Ink.ScreenRequest(Task) && Ink.Desktop().IsEmpty) return End("failed", Ink.NoSpace);
             Computer.Arm();
             if (talk.Count > 0 || (Drive != null && !Asking))
@@ -2847,6 +2891,7 @@ namespace CapriDesktop
                 if (risk != null) approved.Add(risk);
                 Step(waiting.Key, waiting.Value, waitingMember, waitingTarget);
                 if (Computer.Interrupted) return End("stopped", Computer.Why);
+                if (misses >= 2) return End("stopped", Computer.NoClick);
             }
             int lost = 0;
             string results = "";
@@ -2956,6 +3001,7 @@ namespace CapriDesktop
                     if (trace != null) trace("  " + tool + " -> " + result);
                     results += "\n" + move.Key + ": " + result;
                     if (Computer.Interrupted) return End("stopped", Computer.Why);
+                    if (misses >= 2) return End("stopped", Computer.NoClick);
                     if (Computer.Failed(result)) break;
                 }
                 if (results.Length > 0 && !results.StartsWith("\nYou asked", StringComparison.Ordinal)) results = "\nWhat your last moves did:" + results;
@@ -3028,6 +3074,7 @@ namespace CapriDesktop
                 answer.Error = Computer.Failed(answer.Text) || Computer.Interrupted;
                 answers.Add(answer);
                 if (Computer.Interrupted) return End("stopped", Computer.Why);
+                if (misses >= 2) return End("stopped", Computer.NoClick);
                 if (answer.Error) broken = true;
             }
             // A fresh look rides on the batch's last answer, unless it was a look that ran.
@@ -3202,6 +3249,12 @@ namespace CapriDesktop
             string result;
             try { result = name == "learn" ? GameNotes.Learn(Game(), args.Text) : member ? Computer.Use(name, args, shown) : Computer.Act(name, args, Computer.Glimpse()); }
             catch (Exception error) { result = "That didn't work: " + error.Message; }
+            if (result != null && result.StartsWith(Computer.OffScreen, StringComparison.Ordinal))
+            {
+                misses++;
+                if (sighted) result = Computer.OffScreen + ". Use x and y from 0 to 100 on the grid.";
+            }
+            else if (member && args.Coordinate != null) misses = 0;
             if (secret) result = Hush(result, args.Text);
             if (Playing && !secret) played.Add(name + " " + Computer.Traced(args) + ": " + result);
             bool failed = Computer.Failed(result) || Computer.Interrupted;

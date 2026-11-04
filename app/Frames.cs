@@ -1,18 +1,21 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace CapriDesktop
 {
-    internal sealed class FrameGrab : IDisposable
+    internal sealed partial class FrameGrab : IDisposable
     {
         private const int AccessLost = unchecked((int)0x887A0026);
         private const int WaitTimeout = unchecked((int)0x887A0027);
         private readonly object gate = new object();
+        private readonly Func<long> clock;
+        private readonly Func<bool> fullScreen;
+        private readonly Action openDisplay;
+        private readonly Func<bool> copyScreen;
         private Rectangle wanted, area, desktop;
         private IntPtr output, device, context, duplication, staging;
         private OutputDesc outputDesc;
@@ -26,9 +29,17 @@ namespace CapriDesktop
         private DescribeOutput describe;
         private Bitmap fallback;
         private bool opened, ready, disposed;
-        private long retryAt, countedAt;
+        private long retryAt, countedAt, settleUntil;
         private int counted;
         private double fps;
+
+        internal FrameGrab(Func<long> time = null, Func<bool> full = null, Action open = null, Func<bool> copy = null)
+        {
+            clock = time ?? Stopwatch.GetTimestamp;
+            fullScreen = full ?? Native.FillsScreen;
+            openDisplay = open ?? OpenDuplication;
+            copyScreen = copy ?? CopyDesktop;
+        }
 
         internal string Live { get { lock (gate) return !opened ? "Closed" : duplication != IntPtr.Zero ? "DXGI Desktop Duplication" : "Graphics.CopyFromScreen"; } }
         internal double Fps { get { lock (gate) return fps; } }
@@ -42,8 +53,9 @@ namespace CapriDesktop
                 wanted = bounds;
                 opened = true;
                 counted = 0;
-                countedAt = Stopwatch.GetTimestamp();
+                countedAt = clock();
                 fps = 0;
+                retryAt = settleUntil = 0;
                 Reopen();
             }
         }
@@ -54,9 +66,15 @@ namespace CapriDesktop
             if (fallback != null) { fallback.Dispose(); fallback = null; }
             desktop = Screen.FromRectangle(wanted).Bounds;
             area = CaptureArea(wanted, SystemInformation.VirtualScreen);
-            try { if (desktop.Contains(area)) OpenDuplication(); }
-            catch (Exception) { CloseDuplication(); }
-            retryAt = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 2;
+            try { if (desktop.Contains(area)) openDisplay(); }
+            catch (Exception) { Settle(); }
+            retryAt = clock() + Stopwatch.Frequency * 2;
+        }
+
+        private void Settle()
+        {
+            CloseDuplication();
+            retryAt = settleUntil = clock() + Stopwatch.Frequency * 3 / 2;
         }
 
         internal static Rectangle CaptureArea(Rectangle bounds, Rectangle screens) { return Rectangle.Intersect(bounds, screens); }
@@ -134,14 +152,24 @@ namespace CapriDesktop
             {
                 if (disposed) throw new ObjectDisposedException("FrameGrab");
                 if (!opened) return false;
-                if (duplication == IntPtr.Zero && Stopwatch.GetTimestamp() >= retryAt) Reopen();
+                // Lost to a mode change or a window taking the screen, it waits for that to settle before it tries again, even by
+                // copying the screen: a new device on every frame meanwhile can hang the graphics driver under a game
+                // (john_sandevistan, 2 Nov: Valorant crashed as the Mainframe opened).
+                long now = clock();
+                if (now < settleUntil) return false;
+                if (duplication == IntPtr.Zero && now >= retryAt)
+                {
+                    if (fullScreen()) retryAt = now + Stopwatch.Frequency / 2;
+                    else Reopen();
+                    if (clock() < settleUntil) return false;
+                }
                 if (duplication != IntPtr.Zero)
                 {
                     try
                     {
                         OutputDesc current;
                         Check(describe(output, out current));
-                        if (current.Attached == 0 || current.Bounds != desktop || current.Rotation != outputDesc.Rotation) Reopen();
+                        if (current.Attached == 0 || current.Bounds != desktop || current.Rotation != outputDesc.Rotation) { Settle(); return false; }
                         if (duplication != IntPtr.Zero)
                         {
                             if (!Take(timeoutMs)) return false;
@@ -149,18 +177,16 @@ namespace CapriDesktop
                             return true;
                         }
                     }
-                    catch (COMException frameError)
+                    catch (COMException)
                     {
-                        if (frameError.ErrorCode == AccessLost) { Reopen(); return false; }
-                        CloseDuplication();
-                        retryAt = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 2;
+                        Settle();
+                        return false;
                     }
                 }
                 if (area.Width <= 0 || area.Height <= 0) return false;
                 try
                 {
-                    if (fallback == null) fallback = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppRgb);
-                    using (Graphics graphics = Graphics.FromImage(fallback)) graphics.CopyFromScreen(area.Location, Point.Empty, area.Size, CopyPixelOperation.SourceCopy);
+                    if (!copyScreen()) return false;
                     ready = true;
                     Count();
                     return true;
@@ -168,6 +194,13 @@ namespace CapriDesktop
                 catch (System.ComponentModel.Win32Exception) { ready = false; return false; }
                 catch (ExternalException) { ready = false; return false; }
             }
+        }
+
+        private bool CopyDesktop()
+        {
+            if (fallback == null) fallback = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppRgb);
+            using (Graphics graphics = Graphics.FromImage(fallback)) graphics.CopyFromScreen(area.Location, Point.Empty, area.Size, CopyPixelOperation.SourceCopy);
+            return true;
         }
 
         private bool Take(int timeoutMs)
@@ -223,7 +256,7 @@ namespace CapriDesktop
         private void Count()
         {
             counted++;
-            long now = Stopwatch.GetTimestamp();
+            long now = clock();
             double elapsed = (double)(now - countedAt) / Stopwatch.Frequency;
             if (elapsed < 0.5) return;
             fps = counted / elapsed;
@@ -258,6 +291,9 @@ namespace CapriDesktop
             else unmap(context, staging, 0);
         }
 
+        // A frame wider than maxWidth shrinks straight out of the capture in one pass. It used to be copied at full size, then
+        // shrunk again by GDI+: two passes over a 1440p or 4K frame for every clip frame while a game runs (Lachy, 2 Nov: the PC
+        // lagged while clipping, and one clip came out at 4 fps).
         internal unsafe Bitmap Copy(int maxWidth)
         {
             if (maxWidth <= 0) throw new ArgumentOutOfRangeException("maxWidth");
@@ -265,7 +301,8 @@ namespace CapriDesktop
             {
                 if (disposed) throw new ObjectDisposedException("FrameGrab");
                 if (!ready) return null;
-                Bitmap full = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppRgb);
+                int wide = Math.Min(maxWidth, area.Width), tall = wide == area.Width ? area.Height : Math.Max(1, (int)((long)area.Height * wide / area.Width));
+                Bitmap picture = new Bitmap(wide, tall, PixelFormat.Format32bppRgb);
                 try
                 {
                     BitmapData locked;
@@ -273,34 +310,52 @@ namespace CapriDesktop
                     IntPtr source = Read(out across, out down, out locked);
                     try
                     {
-                        BitmapData target = full.LockBits(new Rectangle(Point.Empty, full.Size), ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
-                        try
-                        {
-                            for (int row = 0; row < area.Height; row++)
-                            {
-                                byte* from = (byte*)source + row * down;
-                                uint* to = (uint*)((byte*)target.Scan0 + row * target.Stride);
-                                for (int column = 0; column < area.Width; column++, from += across) to[column] = *(uint*)from;
-                            }
-                        }
-                        finally { full.UnlockBits(target); }
+                        BitmapData target = picture.LockBits(new Rectangle(0, 0, wide, tall), ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
+                        try { Shrink((byte*)source, across, down, area.Width, area.Height, target, wide, tall); }
+                        finally { picture.UnlockBits(target); }
                     }
                     finally { Unread(locked); }
-                    if (full.Width <= maxWidth) { Bitmap original = full; full = null; return original; }
-                    Bitmap small = new Bitmap(maxWidth, Math.Max(1, (int)((long)full.Height * maxWidth / full.Width)), PixelFormat.Format32bppRgb);
-                    try
-                    {
-                        using (Graphics graphics = Graphics.FromImage(small))
-                        {
-                            graphics.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                            graphics.DrawImage(full, new Rectangle(Point.Empty, small.Size));
-                        }
-                        return small;
-                    }
-                    catch { small.Dispose(); throw; }
+                    Bitmap done = picture;
+                    picture = null;
+                    return done;
                 }
-                catch (COMException) { CloseDuplication(); return null; }
-                finally { if (full != null) full.Dispose(); }
+                catch (COMException) { Settle(); return null; }
+                finally { if (picture != null) picture.Dispose(); }
+            }
+        }
+
+        // Each pixel out is the average of the frame's pixels under it, so text and a game's HUD lines don't shimmer. At the same
+        // size it's a plain copy.
+        private static unsafe void Shrink(byte* source, int across, int down, int width, int height, BitmapData target, int wide, int tall)
+        {
+            if (wide == width && tall == height)
+            {
+                for (int row = 0; row < height; row++)
+                {
+                    byte* from = source + (long)row * down;
+                    uint* to = (uint*)((byte*)target.Scan0 + (long)row * target.Stride);
+                    for (int column = 0; column < width; column++, from += across) to[column] = *(uint*)from;
+                }
+                return;
+            }
+            int[] lefts = new int[wide + 1];
+            for (int column = 0; column <= wide; column++) lefts[column] = (int)((long)column * width / wide);
+            for (int row = 0; row < tall; row++)
+            {
+                int top = (int)((long)row * height / tall), bottom = Math.Max(top + 1, (int)((long)(row + 1) * height / tall));
+                uint* to = (uint*)((byte*)target.Scan0 + (long)row * target.Stride);
+                for (int column = 0; column < wide; column++)
+                {
+                    int left = lefts[column], right = Math.Max(left + 1, lefts[column + 1]);
+                    uint blue = 0, green = 0, red = 0;
+                    for (int y = top; y < bottom; y++)
+                    {
+                        byte* from = source + (long)y * down + (long)left * across;
+                        for (int x = left; x < right; x++, from += across) { blue += from[0]; green += from[1]; red += from[2]; }
+                    }
+                    uint count = (uint)((bottom - top) * (right - left));
+                    to[column] = 0xFF000000u | ((red / count) << 16) | ((green / count) << 8) | (blue / count);
+                }
             }
         }
 
@@ -319,7 +374,7 @@ namespace CapriDesktop
                     try { return Downsample(source, area.Width, area.Height, across, down, width, height); }
                     finally { Unread(locked); }
                 }
-                catch (COMException) { CloseDuplication(); return null; }
+                catch (COMException) { Settle(); return null; }
             }
         }
 

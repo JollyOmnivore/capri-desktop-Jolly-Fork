@@ -45,6 +45,8 @@ namespace CapriDesktop
     internal sealed class AgentToolList
     {
         [DataMember(Name = "tools")] public AgentTool[] Tools;
+        [DataMember(Name = "has_more")] public bool More;
+        [DataMember(Name = "next_cursor")] public string Cursor;
     }
 
     [DataContract]
@@ -95,7 +97,7 @@ namespace CapriDesktop
     internal sealed class Agent : IDisposable
     {
         internal const double Pace = 15;
-        internal const int Version = 32;
+        internal const int Version = 36;
         private const string Patience = "\"turn\":{\"turn_timeout\":30,\"silence_end_call_timeout\":45}";
         internal event Action<int> Opened;
         internal event Action<string> Heard;
@@ -111,7 +113,8 @@ namespace CapriDesktop
         private string lastHeard;
         internal Func<string, ToolArguments, string> Act;
 
-        internal static string Prompt { get { return Brain.Persona + Hands.Note + "\nYou are talking out loud in a live voice chat: keep every reply to one or two short spoken sentences, and never write tags in square brackets.\nIf the user goes quiet, they're busy, gaming or muted: stay quiet until they talk to you. Never check in, ask if they're still there, beg them to talk or say they left you hanging.\nSo the voice says your slang right, always spell choom as chewm, preem as preme and yezzirrr as yessirrr. Say chewm rarely, at most once every few replies and never on its own.\nWhen your hands are on a job it runs by itself, so keep talking with them like normal. Lines starting Capri's hands tell you how it's going: use them if they ask, and don't announce them otherwise. If they add to the job or change it, call use_computer once with their words and say so in a few words. Never say a job is done until you're told it finished."; } }
+        // Her voice chat's prompt. With a brain that can't see, she's told she can't look at their screen, the same as in text chat.
+        internal static string Prompt { get { Brain keeper = Brain.Keeper; return Brain.Persona + Hands.NoteFor(Hands.KitFor(keeper != null && keeper.Blind)) + "\nYou are talking out loud in a live voice chat: keep every reply to one or two short spoken sentences, and never write tags in square brackets.\nIf the user goes quiet, they're busy, gaming or muted: stay quiet until they talk to you. Never check in, ask if they're still there, beg them to talk or say they left you hanging.\nSo the voice says your slang right, always spell choom as chewm, preem as preme and yezzirrr as yessirrr. Say chewm rarely, at most once every few replies and never on its own.\nWhen your hands are on a job it runs by itself, so keep talking with them like normal. Lines starting Capri's hands tell you how it's going: use them if they ask, and don't announce them otherwise. If they add to the job or change it, call use_computer once with their words and say so in a few words. Never say a job is done until you're told it finished."; } }
 
         // ElevenLabs keeps its own copy of her prompt, so her agent is tuned again after an update, or when it was tuned with an edited personality.md before 0.7.6.
         internal static bool Stale(int version, string personality) { return version < Version || (personality ?? "") != Brain.PersonalityStamp; }
@@ -148,14 +151,25 @@ namespace CapriDesktop
 
         private static string ToolIds(string key)
         {
-            AgentToolList found = Voice.Reply<AgentToolList>(Voice.Send(Voice.Open("/v1/convai/tools", key, "GET"), null), "/v1/convai/tools");
+            // ElevenLabs lists 30 tools a page unless asked for more, and she has more than that now, so it reads every page
+            // before saving any, or she'd save a copy of the ones on later pages each time.
+            List<AgentTool> saved = new List<AgentTool>();
+            HashSet<string> pages = new HashSet<string>();
+            string path = "/v1/convai/tools?page_size=100";
+            while (true)
+            {
+                AgentToolList found = Voice.Reply<AgentToolList>(Voice.Send(Voice.Open(path, key, "GET"), null), "/v1/convai/tools");
+                if (found.Tools != null) saved.AddRange(found.Tools);
+                if (!found.More) break;
+                if (string.IsNullOrEmpty(found.Cursor) || !pages.Add(found.Cursor)) throw new VoiceException("ElevenLabs didn't list all her tools.");
+                path = "/v1/convai/tools?page_size=100&cursor=" + Uri.EscapeDataString(found.Cursor);
+            }
             List<string> ids = new List<string>();
             for (int i = 0; i < Hands.Count; i++)
             {
                 string id = null;
-                if (found.Tools != null)
-                    foreach (AgentTool tool in found.Tools)
-                        if (tool.Config != null && tool.Config.Type == "client" && tool.Config.Name == Hands.Name(i) && tool.Config.Description == Hands.Description(i)) { id = tool.Id; break; }
+                foreach (AgentTool tool in saved)
+                    if (tool.Config != null && tool.Config.Type == "client" && tool.Config.Name == Hands.Name(i) && tool.Config.Description == Hands.Description(i)) { id = tool.Id; break; }
                 if (id == null) id = Voice.Reply<AgentTool>(Voice.Send(Voice.Open("/v1/convai/tools", key, "POST"), Encoding.UTF8.GetBytes(Hands.ElevenLabsTool(i))), "/v1/convai/tools").Id;
                 if (string.IsNullOrEmpty(id)) throw new VoiceException("ElevenLabs didn't save her tools.");
                 ids.Add(Voice.Quote(id));
@@ -170,6 +184,9 @@ namespace CapriDesktop
             return found.Url;
         }
 
+        // Tool calls whose result hasn't gone back yet, so a settings change can tell its reply hasn't started.
+        private int toolBusy;
+        internal bool ToolBusy { get { return Interlocked.CompareExchange(ref toolBusy, 0, 0) > 0; } }
         internal bool Ready { get { return ready; } }
 
         internal void Start(string url, string voiceId)
@@ -291,10 +308,15 @@ namespace CapriDesktop
                 AgentToolCall call = item.Call;
                 if (call.Name == "app_window" && call.Arguments != null) call.Arguments.Asked = lastHeard ?? "";
                 Func<string, ToolArguments, string> act = Act;
+                Interlocked.Increment(ref toolBusy);
                 ThreadPool.QueueUserWorkItem(delegate
                 {
-                    string result = act == null ? "Her tools are off." : act(call.Name, call.Arguments);
-                    Send("{\"type\":\"client_tool_result\",\"tool_call_id\":" + Voice.Quote(call.Id) + ",\"result\":" + Voice.Quote(result) + ",\"is_error\":false}");
+                    try
+                    {
+                        string result = act == null ? "Her tools are off." : act(call.Name, call.Arguments);
+                        Send("{\"type\":\"client_tool_result\",\"tool_call_id\":" + Voice.Quote(call.Id) + ",\"result\":" + Voice.Quote(result) + ",\"is_error\":false}");
+                    }
+                    finally { Interlocked.Decrement(ref toolBusy); }
                 });
             }
         }

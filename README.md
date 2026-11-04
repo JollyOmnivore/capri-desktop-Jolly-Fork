@@ -14,7 +14,7 @@ She sits on your windows, talks back, plays your games and gets into everything.
 <a href="https://github.com/lachydotmcg/capri-desktop/releases"><img src="https://img.shields.io/github/downloads/lachydotmcg/capri-desktop/total?color=05d9e8&style=flat-square" alt="Downloads"></a>
 <a href="https://discord.gg/F4fDHfGtFk"><img src="https://img.shields.io/badge/Discord-join%20us-5865F2?logo=discord&logoColor=white&style=flat-square" alt="Discord"></a>
 
-[Setup guide](https://lachydotmcg.github.io/capri-desktop/setup/) · [Website](https://lachydotmcg.github.io/capri-desktop/) · [Help](https://lachydotmcg.github.io/capri-desktop/help/) · [Support](#support)
+[Setup guide](https://capriai.app/setup/) · [Website](https://capriai.app/) · [Help](https://capriai.app/help/) · [Support](#support)
 
 <sub>Inspired by jpartnma_'s TikTok video.</sub>
 
@@ -70,7 +70,7 @@ Beware that Capri may try to take over your human CPU. We take no responsibility
 
 **Zero telemetry.** The app sends us nothing. [SECURITY.md](SECURITY.md) lists what she connects to, what the website counts, and what to do if Windows or your antivirus warns you.
 
-Stuck? The [setup guide](https://lachydotmcg.github.io/capri-desktop/setup/) walks through it, or ask in the [Discord](https://discord.gg/F4fDHfGtFk). [Windows or your antivirus may warn you](SECURITY.md#windows-or-your-antivirus-warned-me) because she's a new app. All the code is here.
+Stuck? The [setup guide](https://capriai.app/setup/) walks through it, or ask in the [Discord](https://discord.gg/F4fDHfGtFk). [Windows or your antivirus may warn you](SECURITY.md#windows-or-your-antivirus-warned-me) because she's a new app. All the code is here.
 
 <details>
 <summary><b>What your PC needs</b></summary>
@@ -92,7 +92,7 @@ Stuck? The [setup guide](https://lachydotmcg.github.io/capri-desktop/setup/) wal
 She sits on your windows and chats, talks with an ElevenLabs key, remembers your chats, watches your screen, opens, switches and closes apps and controls your music. Mac also has push-to-talk with local Whisper transcription. The Mainframe, continuous voice chat and jobs with her own cursor are Windows-only for now.
 
 1. Download [Mac (Apple Silicon)](https://github.com/lachydotmcg/capri-desktop/releases/latest/download/Capri-mac-apple-silicon.zip), [Mac (Intel)](https://github.com/lachydotmcg/capri-desktop/releases/latest/download/Capri-mac-intel.zip) or [Linux](https://github.com/lachydotmcg/capri-desktop/releases/latest/download/Capri-linux-x64.tar.gz)
-2. For her brain, use a free NVIDIA key or your own Gemini, OpenRouter, OpenAI, Claude or DeepSeek key from **Brain** in her right-click menu. Or install [Ollama](https://ollama.com) and run `ollama pull gemma4:e4b`
+2. For her brain, use a free NVIDIA key or your own Gemini, OpenRouter, OpenAI, Claude or DeepSeek key from **Brain** in her right-click menu. Or install [Ollama](https://ollama.com) and run `ollama pull gemma4:e4b`. For any other OpenAI-compatible provider, use **Brain > Use my own provider with a key (OpenAI API)...**: it keeps the key on your PC in a file only your account can read.
 3. **Mac:** unzip it, drag Capri into Applications, then open Terminal and run this once. Needs macOS 15 or newer
    ```bash
    xattr -dr com.apple.quarantine /Applications/Capri.app
@@ -102,15 +102,15 @@ She sits on your windows and chats, talks with an ElevenLabs key, remembers your
 
 ## How to use her
 
-Private OpenAI-compatible gateways use local configuration. Copy `gateway.example.json` to `gateway.json` in Capri's application-data folder (on Mac, `~/Library/Application Support/Capri/gateway.json`), set your gateway's base URL and key prefix, then restart Capri. You can instead set `CAPRI_GATEWAY_CONFIG` to an absolute path, such as an ignored `.local/gateway.json` in your checkout. Only HTTPS and loopback HTTP addresses are accepted. Add the API key through Brain as usual; do not put it in this JSON file. The endpoint and prefix stay outside tracked source, and the saved key remains in Capri's private data folder. `gateway.json`, `.local/`, and `out/` are ignored by Git. Ignoring a file does not remove copies from existing commits; push only a branch whose history has been checked.
+Private OpenAI-compatible gateways use local configuration. Copy `gateway.example.json` to `gateway.json` in Capri's application-data folder (on Mac, `~/Library/Application Support/Capri/gateway.json`), set your gateway's base URL and key prefix, then restart Capri. You can instead set `CAPRI_GATEWAY_CONFIG` to an absolute path, such as an ignored `.local/gateway.json` in your checkout. Only HTTPS and loopback HTTP addresses are accepted. Add the API key through BRAIN in Capri Mainframe or More options > Brain; do not put it in this JSON file. The endpoint and prefix stay outside tracked source, and the saved key remains in Capri's private data folder. `gateway.json`, `.local/`, and `out/` are ignored by Git. Ignoring a file does not remove copies from existing commits; push only a branch whose history has been checked.
 
 - **Pencil:** type to her
 - **Wave:** voice chat
 - **Mac TALK:** hold the TALK half of her hover pill to record, then release to send. Allow Microphone access when asked. The first hold downloads a 148 MB Whisper base model; hold again when ready. Transcription runs locally and temporary audio is deleted after processing. The resulting text uses your selected brain, and ElevenLabs or Pocket TTS can speak the reply. Recordings stop after 30 seconds.
-- **Local speech on Mac and Linux:** choose **Settings > Voice > Use Pocket TTS (local)**, then a speaker under **Pocket voices (English)**. The first use downloads the official Pocket runtime (verified with SHA-256), a roughly 235 MB speech model and the selected voice into Capri's data folder. Later speech runs locally without an API key or a voice recording. Pitch, speed, robot, glitch, layers and volume still apply. Choose **Use ElevenLabs** to switch back; its key and voice are kept. Pocket currently uses the verified January 2026 English model. It generates a complete reply before playback, so long replies can take a while; text appears while you wait. Shared voices come from Kyutai's public model repository.
+- **Local speech on Mac and Linux:** choose **POCKET TTS** under **VOICE** in Capri Mainframe, then a speaker under **More options > Settings > Voice > Pocket voices (English)**. The first use downloads the official Pocket runtime (verified with SHA-256), a roughly 235 MB speech model and the selected voice into Capri's data folder. Later speech runs locally without an API key or a voice recording. Pitch, speed, robot, glitch, layers and volume still apply. Choose **Use ElevenLabs** to switch back; its key and voice are kept. Pocket currently uses the verified January 2026 English model. It generates a complete reply before playback, so long replies can take a while; text appears while you wait. Shared voices come from Kyutai's public model repository.
 - **Drag her:** sit her on a window
 - **Right-click her** or the tray icon: menu and settings
-- **Text-only replies on Mac and Linux:** untick **Settings > Voice > Speak replies**. This stops speech and keeps your selected provider and voice saved. Tick it again to speak replies; the choice is remembered after restarting.
+- **Text-only replies on Mac and Linux:** choose **OFF** under **VOICE** in Capri Mainframe, or untick **More options > Settings > Voice > Speak replies**. This stops speech and keeps your selected provider and voice saved. Select your provider or tick it again to speak replies; the choice is remembered after restarting.
 - **Chess on Mac and Linux:** right-click Capri > **Play chess**, or tell her "Let's play chess". Click a piece and a highlighted destination, or drag it. The native board has easy, normal and hard levels, white or black pieces, undo, hints, resign and a four-piece promotion chooser. Changing color starts a new game. Chat commands include "undo", "new game", "hint", "I resign", "I'll play black", "hard", and "close chess". The existing chess engine runs locally without an AI model or API key; chess stock commentary uses text without paid voice calls. Scores last for the current app session.
 - **Readable web search on Mac and Linux:** ask "Search the web for ...". Capri gets titles, links and short excerpts from a local SearXNG service and answers with a source URL. These are search excerpts, not full article reads. Explicit requests such as "search YouTube for cats" still open the browser. Search uses the website permission toggle under Security.
 - **Find and open:** ask "Find the official Pocket TTS GitHub repo and open it." Capri searches first, then gets one follow-up tool turn to choose and open a URL from those results. Ordinary searches stay in text. The follow-up accepts one returned HTTP(S) source URL, offers no unrelated tools, and respects the same website permission toggle and cancellation.
@@ -149,7 +149,7 @@ Just ask her for things, like "open Spotify", "play Blinding Lights", "pause", "
 | **CUSTOM LOCAL** | A voice model you run: a Piper, Kokoro, Kitten or Pocket TTS file, or your own Kokoro-FastAPI, Fish Speech or Qwen3-TTS server |
 | **CLOUD VOICE** | Fish Audio (free tier), ElevenLabs or OpenAI, with your own key |
 
-For a Capri-style voice in Fish Audio or ElevenLabs, paste the [voice prompt from the setup guide](https://lachydotmcg.github.io/capri-desktop/setup/#voice) into their Voice Design.
+For a Capri-style voice in Fish Audio or ElevenLabs, paste the [voice prompt from the setup guide](https://capriai.app/setup/#voice) into their Voice Design.
 
 > [!IMPORTANT]
 > Our project-provided synthetic voice is in Capri's Mainframe and runs on your PC. You may connect third-party text-to-speech services, but we don't provide guides for voice cloning tools. Our only voice-design help is a text prompt for making a synthetic voice.
@@ -158,7 +158,7 @@ For a Capri-style voice in Fish Audio or ElevenLabs, paste the [voice prompt fro
 
 ## Make her yours
 
-Pick what she calls you, her language, her voice and what she does on your PC from the Capri Mainframe. Who she is stays the same for everyone, and since 0.7.6 there's no `personality.md` to rewrite.
+Pick what she calls you, her language, her voice and what she does on your PC from the Capri Mainframe. To change who she is and how she talks, rewrite `personality.md`: Settings > YOU > Her personality > Edit personality.md. It starts as her default, and Reset to her default puts her back.
 
 - **Her safety rules are part of who she is.** They're fixed in her code, in `Safety` in [app/Brain.cs](app/Brain.cs), right after her personality. If you build on her, please keep them as they are, out of respect for Capri's character
 - Her personality is `DefaultPersonality` in [app/Brain.cs](app/Brain.cs), so a pull request can suggest a change for everyone
@@ -176,6 +176,7 @@ Pick what she calls you, her language, her voice and what she does on your PC fr
 - [x] Check in on me (on by default): every so often she glitches in on whatever you're doing
 - [x] With Check in on me on, she asks for your attention now and then when you ignore her
 - [x] Her personality and safety rules fixed in her code, the same Capri for everyone (0.7.6)
+- [x] `personality.md` is back, and her safety rules stay in her code right after it (0.8.0)
 - [ ] A charm meter: how fond of you she is, growing as you spend time with her
 - [ ] Mischief mode: screen glitches, stealing your cursor, "you've been hacked" notes
 
@@ -184,7 +185,7 @@ Pick what she calls you, her language, her voice and what she does on your PC fr
 - [x] Typing to her, with replies in her speech bubble
 - [x] A brain on your PC that sets itself up, or Ollama if you have it
 - [x] A free NVIDIA key, or your own Gemini, OpenRouter, ChatGPT, Claude or DeepSeek key
-- [x] Three brain tiers: NORMAL, HIGHER and MAX INTELLIGENCE
+- [x] Three brain tiers: NORMAL, MEDIUM INTELLIGENCE (free) and MAX INTELLIGENCE
 - [x] Remembering things about you, in her notes (me.md)
 - [x] Keeping your chat for up to a week
 - [x] Remembering past chats and what she saw on your screen, and bringing up old moments herself (0.7.6)
@@ -304,4 +305,4 @@ Free for anything non-commercial: use her, share her, change her. No selling her
 
 Have fun and more updates to come!
 
-<sub>Window perch and music perch animations: her artist, who prefers to stay private. Setup guide based on Dancer's guide in the Discord. Font: Share Tech Mono (OFL). Free voice: Kokoro-82M (Apache-2.0). Her own ears: [NVIDIA Parakeet TDT 0.6B v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) for English and [v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) for 25 European languages ([CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)), int8 exports by sherpa-onnx. Both run with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0). HD voice: [Qwen3-TTS 1.7B](https://github.com/QwenLM/Qwen3-TTS) (Apache-2.0), run with [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) (MIT).</sub>
+<sub>Window perch and music perch animations: her artist, who prefers to stay private. Setup guide based on Dancer's guide in the Discord. Font: Share Tech Mono (OFL). Free voice: Kokoro-82M (Apache-2.0). Her own ears: [NVIDIA Parakeet TDT 0.6B v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) for English and [v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) for 25 European languages ([CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)), int8 exports by sherpa-onnx. Both run with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0). HD voice: [Qwen3-TTS 1.7B](https://github.com/QwenLM/Qwen3-TTS) (Apache-2.0), run with [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) (MIT). Her voice in your mic: [VB-CABLE](https://vb-cable.com) by VB-Audio, donationware, carried unchanged and installed only by its own setup.</sub>

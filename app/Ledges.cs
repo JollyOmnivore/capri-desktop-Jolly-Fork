@@ -15,6 +15,8 @@ namespace CapriDesktop
         internal Rectangle Icon;
         internal bool Floor;
         internal bool Free;
+        // A spot she took beside something full screen, given up once it's gone.
+        internal bool Aside;
         internal int Left;
         internal int Right;
         internal int Y;
@@ -303,6 +305,9 @@ namespace CapriDesktop
             }
             return false;
         }
+
+        // The desktop's icon list view, for her icon prank. Same lookup her ledge-finding already does.
+        internal static IntPtr DesktopListView() { return DesktopList(); }
 
         private static IntPtr DesktopList()
         {
