@@ -263,6 +263,9 @@ namespace CapriDesktop
         private readonly QuietSpeaker noVoice = new QuietSpeaker();
         private ISpeaker elevenLabs;
         private readonly PocketVoice pocket;
+        private ChessBoard chess;
+        private readonly MiniScore chessScore = new MiniScore();
+        internal ChessBoard ChessWindow { get { return chess; } }
         internal Func<string, string, byte[]> PocketSynthesize;
         private VoiceListing voices;
         private string voiceProblem;
@@ -500,6 +503,9 @@ namespace CapriDesktop
             if (Program.Smoke == null) Brain.Load(Path.Combine(folder, "chat.json"));
             Limbs.Attach(Brain);
             Hands.Look = LookAt;
+            Hands.MiniInput = delegate(string words) { return Dispatcher.UIThread.Invoke(() => ChessInput(words)); };
+            Hands.Mini = delegate(ToolArguments args) { return Dispatcher.UIThread.Invoke(() => PlayChess(args)); };
+            Hands.MiniBoard = delegate { return Dispatcher.UIThread.Invoke(() => chess == null ? "" : chess.Game.BoardText()); };
             Hands.Nap = NapTool;
             Hands.MoveSelf = MoveTool;
             Hands.Animate = AnimateTool;
@@ -576,7 +582,7 @@ namespace CapriDesktop
                 Place();
                 frames.Start();
                 FindBrain();
-                if (Program.Smoke != null) smoke = new Smoke(this, Program.Smoke);
+                if (Program.Smoke != null && !Program.CheckChess) smoke = new Smoke(this, Program.Smoke);
                 else
                 {
                     if (fresh) meetAt = Now + 4;
@@ -1463,6 +1469,8 @@ namespace CapriDesktop
             ContextMenu menu = new ContextMenu();
             MenuItem talk = new MenuItem { Header = "Talk to her" };
             talk.Click += delegate { Talk.Open(); };
+            MenuItem playChess = new MenuItem { Header = "Play chess" };
+            playChess.Click += delegate { ChessText("(chess)", PlayChess(new ToolArguments { Name = "chess", Action = "open" })); };
             quietItem = new MenuItem { Header = "Quiet", ToggleType = MenuItemToggleType.CheckBox };
             quietItem.Click += delegate { ToggleShush(); };
             sitItem = new MenuItem { Header = "Sit here" };
@@ -1750,6 +1758,7 @@ namespace CapriDesktop
             MenuItem quit = new MenuItem { Header = "Quit Capri" };
             quit.Click += delegate { Quit(); };
             menu.Items.Add(talk);
+            menu.Items.Add(playChess);
             menu.Items.Add(quietItem);
             menu.Items.Add(sitItem);
             menu.Items.Add(hangItem);
@@ -2334,6 +2343,7 @@ namespace CapriDesktop
         private void Stack(bool above)
         {
             Topmost = above;
+            if (chess != null) chess.Topmost = above;
             foreach (Window window in new Window[] { Talk.Bubble, Talk.Typer, Talk.Pill }) window.Topmost = above;
         }
 
@@ -3443,6 +3453,61 @@ namespace CapriDesktop
             });
         }
 
+        private ToolArguments ChessInput(string words)
+        {
+            string text = (words ?? "").Trim().ToLowerInvariant();
+            if (!Regex.IsMatch(text, @"\b(online|browser|website|chess\.com|lichess)\b") && Regex.IsMatch(text, @"^(?:(?:let'?s|lets|can we|shall we|i want to|i'd like to) )?(?:play|start|open|launch)(?: (?:a game of|some))? chess\b|^chess[.!?]*$"))
+            {
+                Match level = Regex.Match(text, @"\b(easy|normal|hard)\b"), side = Regex.Match(text, @"\b(white|black)\b");
+                return new ToolArguments { Name = "chess", Action = "open", Level = level.Success ? level.Value : null, Side = side.Success ? side.Value : null };
+            }
+            return chess == null ? null : ChessGame.Input(text);
+        }
+
+        private void ChessText(string heard, string line)
+        {
+            Talk.Answer(heard, line);
+            TypeAlong(line, asking);
+        }
+
+        internal string PlayChess(ToolArguments args)
+        {
+            if (args == null || args.Name != "chess" || !Hands.Valid("mini_game", args)) return "Only the chess board is available here.";
+            string action = string.IsNullOrEmpty(args.Action) ? "open" : args.Action;
+            if (action == "close")
+            {
+                if (chess != null) chess.Close();
+                return "Closed the chess board.";
+            }
+            if (chess == null)
+            {
+                if (action != "open" && action != "again") return "Open a chess game first: say play chess.";
+                ComeBack();
+                ChessBoard opened = new ChessBoard(new ChessGame(chessScore, args.Level, args.Side)) { Topmost = OnTop };
+                chess = opened;
+                opened.Played = delegate
+                {
+                    string line = ChessLines.Pick(opened.Game.Moment, random);
+                    opened.Game.Moment = null;
+                    if (line != null && Talk.Quiet && !shushed) ChessText("(chess)", line);
+                };
+                opened.Closed += delegate { if (chess == opened) chess = null; };
+                opened.Show();
+                opened.Activate();
+                return "Chess is ready. You're " + (opened.Game.You == 1 ? "white" : "black") + "; click or drag a piece to move.";
+            }
+            if (action == "open")
+            {
+                if (!string.IsNullOrEmpty(args.Level)) chess.Command("level", args.Level, null);
+                if (!string.IsNullOrEmpty(args.Side) && chess.Game.You != (args.Side == "black" ? -1 : 1)) chess.Command("again", args.Level, args.Side);
+                chess.Show(); chess.Activate();
+                return "Your chess board is open. " + chess.Game.Status;
+            }
+            if (action == "hint" && chess.Game.Result != 0) return "That game has ended. Start a new game for a hint.";
+            chess.Command(action, args.Level, args.Side);
+            return action == "hint" ? "The local hint will appear on the board." : action == "undo" ? "Taken back. " + chess.Game.Status : action == "again" ? "New chess game. " + chess.Game.Status : action == "level" ? "Chess difficulty is " + chess.Game.Level + "." : chess.Game.Status;
+        }
+
         internal void Hear(string text, bool spoken = false)
         {
             text = (text ?? "").Trim();
@@ -3463,6 +3528,13 @@ namespace CapriDesktop
             bool noted;
             try { noted = Hands.Heard(text, out tool, out args) && tool == "remember"; }
             catch (Exception) { noted = false; tool = null; args = null; }
+            if (tool == "mini_game")
+            {
+                string result = Hands.Do(tool, args);
+                Brain.Remember(text, result);
+                ChessText(text, result);
+                return;
+            }
             // Clones and chaos mode are Windows-only: she says so herself, brain or no brain, instead of her brain joking about them.
             if (noted || tool == "clone")
             {
@@ -4115,6 +4187,7 @@ namespace CapriDesktop
         {
             if (quitting) return;
             quitting = true;
+            if (chess != null) chess.Close();
             CancelPushToTalk();
             Brain.Cancel();
             StopSpeech();
@@ -4130,6 +4203,7 @@ namespace CapriDesktop
 
         internal void Finish(int code)
         {
+            if (chess != null) chess.Close();
             CancelPushToTalk();
             frames.Stop();
             Talk.Dismiss();

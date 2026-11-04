@@ -15,6 +15,7 @@ namespace CapriDesktop
     internal static class Program
     {
         internal static string Smoke;
+        internal static bool CheckChess;
         internal static int[] Shelf;
 
         [STAThread]
