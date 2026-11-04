@@ -26,7 +26,7 @@ namespace CapriDesktop
             ShowInTaskbar = false;
             Put(Page, new NeonCaption { Text = title, Size = 20, Bold = true, Display = true }, 24, 15, 288, 29);
             var close = Button("", (int)wide - 50, 20, 26, 22, Close); close.Glyph = 2;
-            double height = kind == "server" ? Server() : kind == "layers" ? Layers() : kind == "vault" ? Vault() : SecurityRows();
+            double height = kind == "microphone" ? Microphone() : kind == "server" ? Server() : kind == "layers" ? Layers() : kind == "vault" ? Vault() : SecurityRows();
             Opened += (_, _) => { Fit(wide, height, Pet.FrameSize(pet.Saved.MainframeSize) == 0 ? 1 : pet.Saved.MainframeSize / 100.0); Sync(); status.Start(); };
             pet.SettingsChanged += Sync;
             status.Tick += (_, _) => Sync();
@@ -52,6 +52,34 @@ namespace CapriDesktop
             readers.Add(() => { string value = read(); if (!entry.Box.IsKeyboardFocusWithin && last != value) { entry.Box.Text = value; last = value; } });
             return entry;
         }
+        private double Microphone()
+        {
+            Caption("Push-to-talk input", 28, 56, 328, 22, MainframeTheme.Cyan);
+            var devices = Put(Page, new NeonPicker { Ellipsis = true }, 28, 92, 328, 28, "Input device");
+            Rows["Input device"] = devices;
+            devices.Changed += index =>
+            {
+                var choices = pet.MicrophoneChoices;
+                if (!syncing && index >= 0 && index < choices.Length) pet.SetMicrophoneInput(choices[index].Id);
+            };
+            var refresh = Button("Refresh devices", 28, 136, 160, 28, pet.RefreshMicrophones);
+            var note = Put(Page, new NeonCaption { Ink = MainframeTheme.Faint, Ellipsis = true }, 28, 180, 328, 44);
+            Caption("Hold TALK, wait for Listening, speak, then release.", 28, 232, 328, 34, MainframeTheme.Faint, 12);
+            Caption("Audio is transcribed on this Mac and deleted.", 28, 274, 328, 22, MainframeTheme.Faint, 12);
+            Caption("A missing selected input never falls back to another mic.", 28, 304, 328, 34, MainframeTheme.Faint, 12);
+            readers.Add(() =>
+            {
+                var choices = pet.MicrophoneChoices;
+                devices.Options(Array.ConvertAll(choices, input => input.Name));
+                devices.Selected = Array.FindIndex(choices, input => input.Id == pet.MicrophoneId);
+                devices.IsEnabled = !pet.MicrophoneLoading;
+                refresh.IsEnabled = !pet.MicrophoneLoading;
+                note.Text = pet.MicrophoneLoading ? "Looking for microphone inputs..." : pet.MicrophoneProblem ?? "Selection saved. It applies to your next TALK recording.";
+            });
+            Opened += (_, _) => pet.RefreshMicrophones();
+            return 366;
+        }
+
         private double Server()
         {
             Caption("OpenAI speech API", 28, 52, 328, 18, MainframeTheme.Faint, 34.0 / 3);

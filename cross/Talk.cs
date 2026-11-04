@@ -26,11 +26,14 @@ namespace CapriDesktop
         internal Rect Panel;
         internal double TipX;
         internal double TipY;
+        internal string Status;
+        internal bool Working;
+        internal double Phase;
         private readonly Random random = new Random();
 
         internal static double PanelWidth() { return 24 + Columns * Look.CharWidth(Type) + 14; }
 
-        internal static double PanelHeight(string reply) { return 13 + Line * (1 + Look.Wrap(Speaker + (reply ?? ""), Columns).Count) + 10; }
+        internal static double PanelHeight(string reply) { return 13 + Line * (1 + Look.Wrap(Speaker + (reply ?? ""), Columns).Count) + 36; }
 
         public override void Render(DrawingContext context)
         {
@@ -107,6 +110,15 @@ namespace CapriDesktop
                 }
             }
             if (CursorOn) context.FillRectangle(new SolidColorBrush(Look.Neon), new Rect(caret.X + 1, caret.Y + 1, cw * 0.85, Line - 5));
+            double footer = panel.Bottom - 24;
+            context.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(75, Look.Cyan.R, Look.Cyan.G, Look.Cyan.B)), 1), new Point(x, footer - 4), new Point(panel.Right - 12, footer - 4));
+            for (int dot = 0; Working && dot < 3; dot++)
+            {
+                byte alpha = !Working || (int)(Phase * 5) % 3 == dot ? (byte)255 : (byte)65;
+                context.FillRectangle(new SolidColorBrush(Color.FromArgb(alpha, Look.Cyan.R, Look.Cyan.G, Look.Cyan.B)), new Rect(x + dot * 6, footer + 5, 3, 3));
+            }
+            if (!Working) context.FillRectangle(new SolidColorBrush(Look.Cyan), new Rect(x, footer + 4, 5, 5));
+            context.DrawText(Look.Text(Status ?? "Reply complete", Look.Regular, 10, Look.Cyan), new Point(x + 24, footer));
         }
     }
 
@@ -862,9 +874,10 @@ namespace CapriDesktop
         // When her voice for this reply ends, and whether she's done with it: not thinking, the reply shown in full and her voice
         // over, with her typing box open or not.
         private double audioEnd;
-        internal bool Finished { get { return !thinking && (reply == null || replyDone >= 0) && pet.Now >= audioEnd; } }
+        internal readonly ReplyActivity Activity = new ReplyActivity();
+        internal bool Finished { get { return !thinking && !Activity.Active && (reply == null || replyDone >= 0) && pet.Now >= audioEnd; } }
         internal bool Done { get { return reply != null && replyDone >= 0; } }
-        internal bool Quiet { get { return reply == null && !thinking && !Typer.IsVisible && !pet.Dictating; } }
+        internal bool Quiet { get { return reply == null && !thinking && !Activity.Active && !Typer.IsVisible && !pet.Dictating; } }
         internal Control Face { get { return Bubble.Sheet; } }
 
         internal void Open()
@@ -903,8 +916,22 @@ namespace CapriDesktop
 
         internal void Thinking(string heard)
         {
+            Activity.Begin();
+            BeginThinking(heard);
+        }
+
+        internal void PreparingVoice(string heard)
+        {
+            Activity.Voice();
+            BeginThinking(heard);
+        }
+
+        internal void VoiceStopped() { audioEnd = pet.Now; Activity.VoiceReady(); }
+
+        private void BeginThinking(string heard)
+        {
             pet.Answered();
-            if (pet.Away) return;
+            if (pet.Away) { Activity.Cancel(); return; }
             reply = null;
             thinking = true;
             pace = LettersPerSecond;
@@ -917,7 +944,9 @@ namespace CapriDesktop
         internal void Answer(string heard, string answer, double seconds = 0)
         {
             pet.Answered();
-            if (pet.Away) return;
+            if (pet.Away) { Activity.Cancel(); return; }
+            if (!thinking && heard != Bubble.Sheet.Heard) Activity.Begin();
+            Activity.Replying();
             reply = answer;
             audioEnd = pet.Now + Math.Max(0, seconds);
             thinking = false;
@@ -941,6 +970,7 @@ namespace CapriDesktop
 
         internal void Dismiss()
         {
+            Activity.Cancel();
             reply = null;
             thinking = false;
             leaving = -1;
@@ -951,6 +981,7 @@ namespace CapriDesktop
         // While she's hidden her bubble and pill stay down too, even one that was still up when her window went.
         internal void Gone()
         {
+            Activity.Cancel();
             reply = null;
             thinking = false;
             leaving = -1;
@@ -971,7 +1002,7 @@ namespace CapriDesktop
             {
                 sheet.Revealed = Math.Min(reply.Length, (int)((now - replyStart) * pace));
                 if (sheet.Revealed >= reply.Length && replyDone < 0) replyDone = now;
-                if (replyDone >= 0 && leaving < 0 && !Typer.IsVisible && !pet.Dictating && now > replyDone + Hold(reply.Length, pet.BubbleTime)) leaving = now;
+                if (replyDone >= 0 && !Activity.Active && leaving < 0 && !Typer.IsVisible && !pet.Dictating && now > replyDone + Hold(reply.Length, pet.BubbleTime)) leaving = now;
             }
             double glitch = 0;
             if (opened >= 0 && now - opened < 0.2) glitch = 1 - (now - opened) / 0.2;
@@ -981,6 +1012,11 @@ namespace CapriDesktop
                 glitch = Math.Min(1, (now - leaving) / 0.25 + 0.3);
             }
             sheet.Glitch = glitch;
+            if (replyDone >= 0 && now >= audioEnd) Activity.Complete();
+            sheet.Status = Activity.Label;
+            Avalonia.Automation.AutomationProperties.SetName(sheet, "Capri · " + Activity.Label);
+            sheet.Working = Activity.Active;
+            sheet.Phase = now;
             sheet.CursorOn = thinking ? (int)(now * 2.5) % 2 == 0 : replyDone < 0 || (int)(now * 2) % 2 == 0;
             Bubble.Place(pet.Head, pet.FeetPoint, pet.Area, pet.DesktopScaling);
             if (Typer.IsVisible) Typer.Follow(Bubble.PanelOnScreen, pet.Area, pet.DesktopScaling);

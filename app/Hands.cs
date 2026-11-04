@@ -2323,7 +2323,12 @@ namespace CapriDesktop
         internal static bool Promised(string said)
         {
             string plain = Warmth.Replace((said ?? "").Replace('’', '\''), "");
-            return Promise.IsMatch(plain) || Offered.IsMatch(plain);
+            return Promise.IsMatch(plain) || Offered.IsMatch(plain) || WaitingPromise(plain);
+        }
+
+        internal static bool WaitingPromise(string said)
+        {
+            return Regex.IsMatch((said ?? "").Replace('’', '\''), @"\b(?:let me|lemme|i'll|i will)\s+(?:just\s+)?(?:do|handle|sort out|take care of)\s+(?:that|this|it)\b", RegexOptions.IgnoreCase);
         }
 
         // "Play some lofi for you" said in place of playing it: how a small brain claims a job with no tool behind it.
@@ -3061,20 +3066,22 @@ namespace CapriDesktop
             return Regex.IsMatch(Asked(said), @"^(?:listen to this(?: (?:video|call|stream|game))?|what did (?:he|she|they) just say|what (?:are they|is (?:he|she)) saying|what's (?:he|she) saying|hear this|(?:translate )?what (?:they're|he's|she's|they are|he is|she is) saying)(?: (?:in|on) (?:this|the) (?:video|call|stream|game))?$", RegexOptions.IgnoreCase);
         }
 
+        private const string SearchVisit = @"(?:open|(?:pull|bring)(?:\s+(?:it|that|this|them|the\s+(?:page|site|website|link|result)))?\s+up|visit)";
+
         internal static bool SearchOpening(string request)
         {
             string text = Asked(request);
             if (!Regex.IsMatch(text, @"\b(search|find|look up|research)\b", RegexOptions.IgnoreCase)) return false;
-            if (Regex.IsMatch(text, @"\b(don['’]?t|do not|never|without)\b.{0,40}\b(open|pull up|bring up|visit)\b", RegexOptions.IgnoreCase)) return false;
-            if (Regex.IsMatch(text, @"\b(?:open|pull up|bring up|visit)\s+(?:nothing|no\b)", RegexOptions.IgnoreCase)) return false;
-            return Regex.IsMatch(text, @"\b(?:and(?: then)?|then|also|please)\s+(?:open|pull up|bring up|visit)\b|^(?:open|pull up|bring up|take me to|visit)\b|[.!?]\s*(?:open|pull up|bring up|visit)\b", RegexOptions.IgnoreCase);
+            if (Regex.IsMatch(text, @"\b(don['’]?t|do not|never|without)\b.{0,40}\b" + SearchVisit + @"\b", RegexOptions.IgnoreCase)) return false;
+            if (Regex.IsMatch(text, @"\b" + SearchVisit + @"\s+(?:nothing|no\b)", RegexOptions.IgnoreCase)) return false;
+            return Regex.IsMatch(text, @"\b(?:and(?: then)?|then|also|please)\s+" + SearchVisit + @"\b|^(?:" + SearchVisit + @"|take me to)\b|[.!?]\s*" + SearchVisit + @"\b", RegexOptions.IgnoreCase);
         }
 
         private static string SearchTopic(string request)
         {
             string topic = Regex.Replace(request, @"^(?:find|search(?: (?:the )?(?:web|internet))?(?: for)?|look up|research)\s+", "", RegexOptions.IgnoreCase);
-            topic = Regex.Replace(topic, @"\s+(?:and(?: then)?|then|also)\s+(?:open|pull up|bring up|visit)\b.*$", "", RegexOptions.IgnoreCase);
-            return topic.Trim();
+            topic = Regex.Replace(topic, @"(?:[,;.!?]\s*|\s+)(?:and(?: then)?|then|also|please)\s+" + SearchVisit + @"\b.*$", "", RegexOptions.IgnoreCase);
+            return topic.Trim().TrimEnd(',', ';', '.', '!', '?');
         }
 
         internal static string ReturnedLink(string chosen, IEnumerable<string> results)
@@ -4332,8 +4339,15 @@ namespace CapriDesktop
 
         internal static string Address(string site, string search)
         {
-            string host = Regex.Replace((site ?? "").Trim().ToLowerInvariant(), @"^(https?://)?(www\.)?", "");
             bool searching = !string.IsNullOrWhiteSpace(search);
+            string supplied = (site ?? "").Trim();
+            if (!searching && Regex.IsMatch(supplied, @"\Ahttps?://", RegexOptions.IgnoreCase))
+            {
+                Uri direct;
+                if (!Uri.TryCreate(supplied, UriKind.Absolute, out direct) || direct.Host.IndexOf('.') < 0 || direct.UserInfo.Length > 0) return null;
+                return direct.AbsoluteUri;
+            }
+            string host = Regex.Replace(supplied.ToLowerInvariant(), @"^(https?://)?(www\.)?", "");
             if (searching)
             {
                 for (int i = 0; i < Searches.GetLength(0); i++)

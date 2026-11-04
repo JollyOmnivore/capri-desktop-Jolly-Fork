@@ -141,12 +141,21 @@ namespace CapriDesktop
         {
             if (step == 0)
             {
+                var activity = new ReplyActivity();
+                activity.Begin(); activity.Tool("web_search", null);
+                if (!activity.Active || activity.Label != "Searching the web") throw new Exception("Tool activity did not start.");
+                activity.Tool("web_search", "Found a source."); activity.Complete();
+                if (activity.Active || activity.Label != "Action finished") throw new Exception("Tool activity did not finish.");
+                checks.Add("PASS reply activity: real work has an active state and completed actions stop animating");
+                var recorder = LocalDictation.Recorder("capri-mic", "speech.wav", "fixture microphone");
+                if (recorder.UseShellExecute || recorder.ArgumentList.Count != 3 || recorder.ArgumentList[1] != "--device" || recorder.ArgumentList[2] != "fixture microphone" || LocalDictation.SpeechLanguage("Spanish") != "es") throw new Exception("Push-to-talk lost its selected input or Whisper language code.");
+                checks.Add("PASS microphone input: the saved UID is a separate recorder argument and language names become Whisper codes");
                 if (new ChessPosition(ChessPosition.Start).Legal().Count != 20 || Hands.Tools.IndexOf("\"chess\"", StringComparison.Ordinal) < 0) throw new Exception("The shared chess engine or native board tool is missing.");
                 checks.Add("PASS chess: the shared legal-move engine loads and the native chess tool is available");
                 string searched = Hands.Do("web_search", new ToolArguments { Query = "public test query" });
                 if (searched.IndexOf("Readable public test information.", StringComparison.Ordinal) < 0 || searched.IndexOf("https://example.com/search-sample", StringComparison.Ordinal) < 0 || Security.Needs("web_search", new ToolArguments()) != Security.Open) throw new Exception("Web search didn't return readable sources or respect website permissions.");
                 checks.Add("PASS web search: local search results supply readable excerpts and source links through the website permission gate");
-                if (!Hands.SearchOpening("Find the official project site and open it") || Hands.SearchOpening("Search the web for the project") || Hands.ReturnedLink("https://example.com/search-sample", new[] { searched }) == null || Hands.ReturnedLink("https://example.com/not-returned", new[] { searched }) != null) throw new Exception("Search follow-up didn't require a requested open and a returned source link.");
+                if (!Hands.SearchOpening("Find the official project site and open it") || !Hands.SearchOpening("Search the web for a recipe then pull it up") || Hands.SearchOpening("Find a recipe and do not bring it up") || Hands.Address("https://www.example.com/Recipe?Size=Two", null) != "https://www.example.com/Recipe?Size=Two" || Hands.SearchOpening("Search the web for the project") || Hands.ReturnedLink("https://example.com/search-sample", new[] { searched }) == null || Hands.ReturnedLink("https://example.com/not-returned", new[] { searched }) != null) throw new Exception("Search follow-up didn't require a requested open and a returned source link.");
                 checks.Add("PASS search follow-up: find-and-open requests can use a returned source link; ordinary searches and invented links cannot open a page");
                 foreach (Clip clip in pet.Clips) if (!clip.Even || clip.Strip.PixelSize.Height != 384) throw new Exception("A sprite strip doesn't split into even 384 px cells.");
                 checks.Add("PASS sprites: all " + pet.Clips.Count + " clips, standing and perched, load from the app and split into even cells");

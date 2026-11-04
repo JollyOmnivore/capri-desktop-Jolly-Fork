@@ -37,6 +37,7 @@ namespace CapriDesktop
         [DataMember] internal bool Silent;
         [DataMember] internal bool PocketVoice;
         [DataMember] internal string PocketSpeaker;
+        [DataMember] internal string MicrophoneInput;
         [DataMember] internal int Typing;
         [DataMember] internal bool NoDiscord;
         [DataMember] internal string CloudModel;
@@ -516,6 +517,15 @@ namespace CapriDesktop
             if (Program.Smoke == null) Sfx.Out = Limbs.Sound;
             if (Program.Smoke == null) Brain.Load(Path.Combine(folder, "chat.json"));
             Limbs.Attach(Brain);
+            Brain.ToolActivity = delegate(int revision, string tool, string result)
+            {
+                Dispatcher.UIThread.Post(delegate
+                {
+                    if (quitting || Away || revision != Brain.Revision) return;
+                    Talk.Activity.Tool(tool, result);
+                    Talk.Update(Now);
+                });
+            };
             StartAwake();
             Hands.Look = LookAt;
             Hands.MiniInput = delegate(string words) { return Dispatcher.UIThread.Invoke(() => ChessInput(words)); };
@@ -1438,7 +1448,7 @@ namespace CapriDesktop
             Brain.Cancel();
             StopSpeech();
             Talk.Dismiss();
-            LocalDictation session = new LocalDictation(folder);
+            LocalDictation session = new LocalDictation(folder) { InputDevice = Saved.MicrophoneInput };
             dictation = session;
             bool setup = !session.Installed;
             Talk.Answer("(microphone)", setup ? "Setting up local speech (148 MB). Hold TALK again when it's ready." : "Starting microphone. Allow Microphone access if macOS asks, then hold TALK again if you already released it.");
@@ -1470,7 +1480,7 @@ namespace CapriDesktop
                     if (ticket != asking || quitting) return;
                     if (problem != null) Talk.Answer("(microphone)", problem);
                     else if (setup) Talk.Answer("(microphone)", "Local speech is ready. Hold TALK, speak, then release to send.");
-                    else if (string.IsNullOrWhiteSpace(text)) Talk.Answer("(microphone)", "I didn't catch any speech. Hold TALK and try again.");
+                    else if (string.IsNullOrWhiteSpace(text)) Talk.Answer("(microphone)", "Audio arrived, but I couldn't recognize speech. Check Microphone input in Capri Mainframe > Settings, then hold TALK and try again.");
                     else Hear(text, true);
                 });
             });
@@ -1848,6 +1858,12 @@ namespace CapriDesktop
             menu.Items.Add(playChess);
             MenuItem extra = new MenuItem { Header = "More options" };
             extra.Items.Add(brainMenu);
+            if (OperatingSystem.IsMacOS())
+            {
+                MenuItem microphone = new MenuItem { Header = "Microphone input..." };
+                microphone.Click += delegate { OpenMicrophone(); };
+                extra.Items.Add(microphone);
+            }
             extra.Items.Add(settings);
             menu.Items.Add(extra);
             menu.Items.Add(sizes);
@@ -3884,6 +3900,7 @@ namespace CapriDesktop
             Brain.Cancel();
             StopSpeech();
             string tool;
+            Talk.Activity.Begin();
             if (System.Text.RegularExpressions.Regex.IsMatch(text, @"^(?:please )?(?:(?:can|could|would) you )?(?:open|show|bring up|let me see|can i see)(?: me)?(?: the| your| her| capri'?s?)? (?:capri )?main ?frame(?: window)?(?: please)?[.!?]*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             {
                 Reply(ticket, text, MainframeTool(null));
@@ -3938,14 +3955,17 @@ namespace CapriDesktop
                 string said;
                 string after = null;
                 bool stuck = false;
+                bool failed = false;
                 try { said = think == null ? Brain.Ask(text, follows, out after) : think(text); }
-                catch (BrainException error) { said = error.Message == Brain.Offline ? Offline : error.Told ? error.Message : "My brain couldn't answer: " + error.Message; stuck = Brain.Stalled(error); }
-                catch (Exception error) { said = Brain.Explain(error, remote) ?? "That reply was cancelled. Try again."; stuck = Brain.Stalled(error); }
-                if (string.IsNullOrWhiteSpace(said)) said = "My brain sent an empty reply. Try again.";
+                catch (BrainException error) { failed = true; said = error.Message == Brain.Offline ? Offline : error.Told ? error.Message : "My brain couldn't answer: " + error.Message; stuck = Brain.Stalled(error); }
+                catch (Exception error) { failed = true; said = Brain.Explain(error, remote) ?? "That reply was cancelled. Try again."; stuck = Brain.Stalled(error); }
+                if (string.IsNullOrWhiteSpace(said)) { failed = true; said = "My brain sent an empty reply. Try again."; }
                 Dispatcher.UIThread.Post(delegate
                 {
                     if (ticket != asking) return;
                     if (stuck && switches < 2 && Hop(remote)) { Ask(ticket, text, switches + 1); return; }
+                    if (failed) Talk.Activity.Fail();
+                    if (!failed && Talk.Activity.Tools == 0 && (Hands.WaitingPromise(said) || said == Hands.Unpromised)) { Talk.Activity.NoAction(); said = Hands.Unpromised; }
                     if (input != inputTurn) after = null;
                     Reply(ticket, text, said, after);
                 });
@@ -3997,7 +4017,7 @@ namespace CapriDesktop
             return delegate(string text) { return render(text, speaker); };
         }
 
-        private void StopSpeech() { voice.Stop(); pocket.Stop(); }
+        private void StopSpeech() { voice.Stop(); pocket.Stop(); if (Talk != null) Talk.VoiceStopped(); }
 
         internal void ChoosePocket(string speaker)
         {
@@ -4042,7 +4062,7 @@ namespace CapriDesktop
             followUp.Drop();
             if (!Speaks || Voice.Spoken(said).Length == 0) { if (ShowReply(ticket, heard, said, 0, after, following, input, answer)) TypeAlong(said, ticket); return; }
             ISpeaker speaker = Speaker;
-            if (!following) Talk.Thinking(heard);
+            if (!following) Talk.PreparingVoice(heard);
             answer = answerTurn;
             Func<string, byte[]> render = SpeechRenderer();
             bool[] shown = { false };
@@ -4064,6 +4084,7 @@ namespace CapriDesktop
                     if (ticket != asking) return;
                     voiceProblem = problem;
                     bool alreadyShown = shown[0];
+                    if (!following) Talk.Activity.VoiceReady();
                     shown[0] = true;
                     double seconds = wav == null ? 0 : Voice.Seconds(wav);
                     PresentReply(ticket, heard, said, seconds, after, following, input, answer, delegate
@@ -4630,6 +4651,7 @@ namespace CapriDesktop
         [DataContract]
         internal sealed class NewSettings
         {
+            [DataMember] internal string MicrophoneInput;
             [DataMember] internal string VoiceProvider;
             [DataMember] internal string LocalVoiceUrl;
             [DataMember] internal string LocalVoiceModel;
@@ -4662,6 +4684,7 @@ namespace CapriDesktop
             saved.LocalVoiceUrl = newer.LocalVoiceUrl;
             saved.LocalVoiceModel = newer.LocalVoiceModel;
             saved.LocalVoiceName = newer.LocalVoiceName;
+            if (newer.MicrophoneInput != null) saved.MicrophoneInput = newer.MicrophoneInput;
             saved.LocalVoiceFormat = newer.LocalVoiceFormat;
             saved.BrainServer = newer.BrainServer;
             saved.ServerModel = newer.ServerModel;
@@ -4685,7 +4708,7 @@ namespace CapriDesktop
 
         internal static NewSettings Newest(Settings saved)
         {
-            return new NewSettings { VoiceProvider = saved.VoiceProvider, LocalVoiceUrl = saved.LocalVoiceUrl, LocalVoiceModel = saved.LocalVoiceModel, LocalVoiceName = saved.LocalVoiceName, LocalVoiceFormat = saved.LocalVoiceFormat, BrainServer = saved.BrainServer, ServerModel = saved.ServerModel,
+            return new NewSettings { MicrophoneInput = saved.MicrophoneInput, VoiceProvider = saved.VoiceProvider, LocalVoiceUrl = saved.LocalVoiceUrl, LocalVoiceModel = saved.LocalVoiceModel, LocalVoiceName = saved.LocalVoiceName, LocalVoiceFormat = saved.LocalVoiceFormat, BrainServer = saved.BrainServer, ServerModel = saved.ServerModel,
                 MainframeSize = saved.MainframeSize, AdvancedSettings = saved.AdvancedSettings, MemorySize = saved.MemorySize, ReplyLength = saved.ReplyLength, BrainTier = saved.BrainTier, FreeModel = saved.FreeModel, PaidModel = saved.PaidModel, SpeechModel = saved.SpeechModel,
                 CareSwitches = saved.CareSwitches, CareTimes = saved.CareTimes, CareNight = saved.CareNight, NoHeadPats = saved.NoHeadPats, NoFollowUps = saved.NoFollowUps, NoKeepAwake = saved.NoKeepAwake, Vault = saved.Vault };
         }
