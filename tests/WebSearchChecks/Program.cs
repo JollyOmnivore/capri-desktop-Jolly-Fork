@@ -124,6 +124,16 @@ if (args.Length >= 2 && args[0] == "--live")
         string followed = (string)Call(brain, next, "Ask", "Find the official Pocket TTS GitHub repo and open it.");
         Console.WriteLine("Local model chained answer: " + followed);
         Check(opened.Count == 1 && opened[0].TrimEnd('/') == "https://github.com/kyutai-labs/pocket-tts", "local model searches then selects and opens the actual official result without a real browser launch");
+        var recipeResults = new List<string>();
+        hands.GetField("SearchWeb", members).SetValue(null, new Func<string, int, string>((query, count) => { string result = Search(query, count); recipeResults.Add(result); return result; }));
+        opened.Clear();
+        object recipe = Activator.CreateInstance(brain, true);
+        brain.GetField("Model", members).SetValue(recipe, args[2]);
+        act.SetValue(recipe, hands.GetMethod("Do", members).CreateDelegate(act.FieldType));
+        string recipeReply = (string)Call(brain, recipe, "Ask", "Search the web for a pancake recipe then pull it up.");
+        Console.WriteLine("Local recipe-chain answer: " + recipeReply);
+        Console.WriteLine("Recipe dispatch: " + recipeResults.Count + " searches; " + opened.Count + " browser calls: " + string.Join(" | ", opened));
+        Check(recipeResults.Count == 1 && opened.Count == 1 && Call(hands, null, "ReturnedLink", opened[0], recipeResults) != null, "local model handles recipe then pull it up by opening one real returned source");
     }
 }
 Console.WriteLine((checks + chained) + " web search and chain checks passed.");

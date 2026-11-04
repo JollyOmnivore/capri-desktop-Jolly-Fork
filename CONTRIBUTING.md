@@ -102,6 +102,8 @@ Tool activity UI checks cover real dispatch callbacks, animated 1x/2x renders, t
 dotnet run --project tests/ChessChecks/ChessChecks.csproj -c Release -- /absolute/path/to/activity-checks --activity
 ```
 
+Search checks also cover pull-it-up/bring-it-up wording, explicit no-open instructions and exact URL preservation (including www, path case, query and fragment). The optional live run exercises a recipe search-to-open using local Ollama and SearXNG, with browser launches intercepted.
+
 The mock web-search suite verifies activity callbacks on actual search and browser tool dispatch, including the upstream planner, and an action promise with no dispatched tool.
 
 ## House rules
