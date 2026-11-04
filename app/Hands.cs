@@ -99,6 +99,9 @@ namespace CapriDesktop
         internal readonly string Name;
         internal readonly string Id;
         internal InstalledApp(string name, string id) { Name = name; Id = id; }
+        internal readonly string BundleId;
+        internal readonly string[] Aliases;
+        internal InstalledApp(string name, string id, string bundleId, params string[] aliases) { Name = name; Id = id; BundleId = bundleId; Aliases = aliases; }
     }
 
     // Her SECURITY window (Lachy, 29 Oct): a toggle for each kind of thing she does on their PC, set by a slider of four presets.
@@ -1243,6 +1246,8 @@ namespace CapriDesktop
         private static readonly Regex Opener = new Regex(@"^((great|nice|cool|sweet|perfect|awesome|amazing|alright|alr|aight|bet|thanks|thank you|thx|ty|so|and|now|also|oh|wait|um|uh|hmm|lol|lmao|bro|dude|bruh)[\s,!.]+)+(?=((hey|yo|ok|okay)[\s,]+)?(capri\b|(can|could|would|will) (you|u)\b|please\b|pls\b|plz\b))", RegexOptions.IgnoreCase);
 
         internal static Func<List<InstalledApp>> Catalog = ReadCatalog;
+        internal static Func<InstalledApp, string> LaunchApp;
+        internal static Func<string, string> AppAlias;
         internal static Func<string, bool> Exists = File.Exists;
         internal static Action<string> Run = Start;
         internal static Func<string, string> Opened = BringOpened;
@@ -1893,6 +1898,9 @@ namespace CapriDesktop
                 string tool = Specs[i, 0], how;
                 if (!kit.Has(tool)) continue;
                 string description = Unsaying(kit, tool == "shortcut" && someKeys ? "Press a keyboard shortcut for them: " + Joined(doing, "or") + "." : Specs[i, 1]), schema = Unsaying(kit, Specs[i, 2]);
+#if CROSS
+                if (tool == "open_app" && OnMac) description = "Open an installed Mac app by name, a known alias such as VS Code or Chrome, or an exact bundle ID or catalog path. The result confirms whether it started, was already running, or has no visible window. If several apps match, ask the user to choose an exact name, bundle ID or path; never choose for them. Do not retry uncertain startup: the app may still be opening.";
+#endif
                 if (tool == "capri_settings") { description = Unsaying(kit, SettingsDescription(kit)); schema = SettingsSchema(kit); }
                 foreach (string gap in kit.Missing.Keys)
                     if (gap.StartsWith(tool + ":", StringComparison.Ordinal)) schema = Without(schema, gap.Substring(tool.Length + 1));
@@ -3681,6 +3689,9 @@ namespace CapriDesktop
             if (want.Length == 0) return false;
             try
             {
+#if CROSS
+                if (OnMac) return Match(Apps(), target).Count > 0;
+#endif
                 foreach (InstalledApp app in Apps())
                     if (Score(app, want) >= 3) return true;
 #if CROSS
@@ -3774,12 +3785,24 @@ namespace CapriDesktop
         {
             if (string.IsNullOrWhiteSpace(wanted)) return "Which app, choom?";
             List<InstalledApp> found = Match(Apps(), wanted);
+#if CROSS
+            if (found.Count == 0 && OnMac) { Forget(); found = Match(Apps(), wanted); }
+#endif
             string nicknamed = found.Count == 0 ? Nickname(wanted) : null;
             if (nicknamed != null) found = Match(Apps(), nicknamed);
             if (found.Count == 0) return "No app called " + wanted.Trim() + " is installed on this PC.";
+#if CROSS
+            if (OnMac && found.Count > 1 && found.Exists(app => app.BundleId != null))
+            {
+                List<string> choices = new List<string>();
+                foreach (InstalledApp app in found) { if (choices.Count == 5) break; choices.Add(app.Name + " (" + app.Id + ")"); }
+                return "Which app did you mean? " + string.Join("; ", choices.ToArray()) + ". Give its exact name, bundle ID or path.";
+            }
+#endif
             // When several match equally well, the one with the fewest extra words is closest to what they said.
             InstalledApp chosen = found[0];
             foreach (InstalledApp app in found) if (AppName(app).Length < AppName(chosen).Length) chosen = app;
+            if (chosen.BundleId != null) return LaunchApp == null ? "Couldn't open " + chosen.Name + ": the verified app launcher isn't available." : LaunchApp(chosen);
             Run(chosen.Id);
             string openedName = AppName(chosen) == "spotify" ? "Spotify" : chosen.Name;
             return "Opened " + openedName + Opened(openedName) + ".";
@@ -3787,6 +3810,9 @@ namespace CapriDesktop
 
         internal static List<InstalledApp> Match(List<InstalledApp> apps, string wanted)
         {
+            string exact = (wanted ?? "").Trim();
+            List<InstalledApp> identified = apps.FindAll(app => app.BundleId != null && (app.Id == exact || app.BundleId.Length > 0 && string.Equals(app.BundleId, exact, StringComparison.OrdinalIgnoreCase)));
+            if (identified.Count > 0) return identified;
             string want = Regex.Replace(Plain(wanted), @"^the |( app| application| game)$", "");
             List<InstalledApp> top = new List<InstalledApp>();
             if (want.Length == 0) return top;
@@ -3797,8 +3823,19 @@ namespace CapriDesktop
                 int score = Score(app, want);
                 if (score == 0 || score < best) continue;
                 if (score > best) { best = score; top.Clear(); }
-                if (!top.Exists(other => AppName(other) == name)) top.Add(app);
+                if (!top.Exists(other => app.BundleId != null ? other.Id == app.Id : AppName(other) == name)) top.Add(app);
             }
+#if CROSS
+            if (best < 4 && OnMac && AppAlias != null)
+            {
+                string alias = AppAlias(want);
+                if (!string.IsNullOrEmpty(alias) && Plain(alias) != want)
+                {
+                    List<InstalledApp> named = Match(apps, alias);
+                    if (named.Count > 0) return named;
+                }
+            }
+#endif
             return top;
         }
 
@@ -3820,6 +3857,7 @@ namespace CapriDesktop
             string name = AppName(app);
             if (name.Length == 0) return 0;
             int score = Math.Max(Score(name, want), Score(Plain(app.Name), want));
+            if (app.Aliases != null) foreach (string alias in app.Aliases) score = Math.Max(score, Score(Plain(alias), want));
 #if CROSS
             // Mac and Linux list every .app and .desktop name, so part of a word doesn't count there: "minecraft" can't open an app
             // that merely has it inside a longer name (a Bazzite user).

@@ -47,8 +47,10 @@
   <Target Name="BuildMicrophoneHelper" BeforeTargets="PrepareForBuild" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
     <MakeDir Directories="$(IntermediateOutputPath)" />
     <Exec Command="xcrun swiftc -O -target $(MicrophoneTarget) -module-cache-path &quot;$(IntermediateOutputPath)swift-cache&quot; &quot;$(MSBuildProjectDirectory)/mac/Microphone.swift&quot; -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker &quot;$(MSBuildProjectDirectory)/mac/Microphone.plist&quot; -o &quot;$(IntermediateOutputPath)capri-mic&quot;" />
+    <Exec Command="xcrun swiftc -O -target $(MicrophoneTarget) -module-cache-path &quot;$(IntermediateOutputPath)swift-cache&quot; &quot;$(MSBuildProjectDirectory)/mac/Apps.swift&quot; -o &quot;$(IntermediateOutputPath)capri-apps&quot;" />
     <ItemGroup>
       <Content Include="$(IntermediateOutputPath)capri-mic" Link="capri-mic" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(IntermediateOutputPath)capri-apps" Link="capri-apps" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
   </Target>
 </Project>

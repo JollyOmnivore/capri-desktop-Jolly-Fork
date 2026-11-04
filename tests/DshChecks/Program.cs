@@ -161,7 +161,8 @@ try
     effects.Clear(); Native("Search the web for a recipe then pull it up");
     Check(effects.Count == 1 && !File.Exists(Path.Combine(workspace, "source-injection.txt")), "search workflow cannot dispatch extra native or shell actions");
     plan = new() { ("look_at_screen", new { focus = "editor" }), ("open_app", new { name = "test app" }) };
-    Hands.Catalog = () => new List<InstalledApp> { new InstalledApp("test app", "test-app-fixture") };
+    Hands.Catalog = () => new List<InstalledApp> { new InstalledApp("test app", "/Applications/test-app-fixture.app", "test.capri.fixture") };
+    MacLauncher.Run = arguments => { effects.Add("launch:" + arguments[1]); return "{\"status\":\"opened\",\"visible\":true,\"activated\":true}"; };
     effects.Clear(); Native("Check my screen and open test app");
     Check(effects.Contains("screen") && effects.Any(x => x.Contains("test-app-fixture")), "DSH screen and app calls use the native hooks");
     Check(requests.Last().Contains("CAPRI_SCREEN_42"), "screen description returns to DSH without guessing or an extra screenshot path");
