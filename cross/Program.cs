@@ -16,11 +16,13 @@ namespace CapriDesktop
     {
         internal static string Smoke;
         internal static bool CheckChess;
+        internal static bool ShowMainframe;
         internal static int[] Shelf;
 
         [STAThread]
         private static int Main(string[] args)
         {
+            ShowMainframe = Array.IndexOf(args, "--mainframe") >= 0 || File.Exists(Path.Combine(AppContext.BaseDirectory, "capri-preview"));
             if (args.Length >= 5 && args[0] == "--shelf")
             {
                 Shelf = new[] { int.Parse(args[1]), int.Parse(args[2]), int.Parse(args[3]), int.Parse(args[4]) };
@@ -55,6 +57,7 @@ namespace CapriDesktop
                 icons.Add(tray);
                 TrayIcon.SetIcons(this, icons);
                 pet.Show();
+                if (Program.ShowMainframe && Program.Smoke == null) pet.OpenMainframe();
             }
             base.OnFrameworkInitializationCompleted();
         }

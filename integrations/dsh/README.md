@@ -18,6 +18,8 @@ dotnet build cross/Capri.Cross.csproj -c Release -o out/dsh-cross
 out/dsh-cross/Capri
 ```
 
+For a Finder-ready Mac app with .NET included, run `sh ci/package-dsh-mac.sh` (or set `CAPRI_DOTNET` to the repository SDK executable). This creates `out/Capri DSH Preview.app` with a separate preview bundle identifier. Open that app from Finder; it does not need a system .NET installation. To open Mainframe immediately, use `open -n "out/Capri DSH Preview.app" --args --mainframe`. The raw `out/dsh-cross/Capri` development executable above requires .NET to be installed or `DOTNET_ROOT` to point to the repository SDK.
+
 Quit the existing Capri instance before launching another interactive copy. Keep the currently working app bundle until this branch is ready for daily use; changing a Mac bundle can require regranting screen/microphone permissions.
 
 Open Capri Mainframe and use **DSH backend** in the BRAIN section. **DSH setup** opens the runtime and workspace configuration; the previous More options entry also remains available. The setup can detect the repository's installed runtime in build output. Enter the absolute Node executable and runtime folder printed by setup if detection is unavailable, and select a workspace. Choose your local Ollama model under Brain, then enable DSH. Your existing model choice is used; the default Ollama port is 11434. Switching the Mainframe toggle off restores the Capri chat engine and cancels the pending DSH turn. An invalid setup leaves the toggle off and opens configuration with the error.
