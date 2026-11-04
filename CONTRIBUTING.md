@@ -64,6 +64,14 @@ dotnet run --project tests/PocketVoiceChecks/PocketVoiceChecks.csproj -c Release
 
 Add `-- --live /path/to/test-data` to install the pinned official runtime and generate real speech without playing it. Its public model cache lives under `test-data/pocket-tts/cache`. The app smoke test also checks provider switching, saved voice selection, all effects and layers, and audio completing after the text fallback.
 
+Readable web search checks use fake search results and loopback mock servers:
+
+```bash
+dotnet run --project tests/WebSearchChecks/WebSearchChecks.csproj -c Release
+```
+
+The same suite tests search-to-open sequencing, returned-link validation, rejected extra tools, permission holds and cancellation against a mock model API. Add `-- --live http://127.0.0.1:8080 qwen3.5:9b` to also exercise an existing local SearXNG instance and a local Ollama model with public test queries, including finding and selecting the official Pocket TTS repo. Browser launches are intercepted in the tests. The normal checks never contact a search engine or use real credentials. The app smoke test uses a search fixture.
+
 ## House rules
 
 - **Match the code around you.** No code comments, plain names, and the same layout as the file you're in.

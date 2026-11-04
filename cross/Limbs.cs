@@ -88,6 +88,7 @@ namespace CapriDesktop
 
         internal static void Attach(Brain brain)
         {
+            Hands.SearchWeb = WebSearch.Search;
             Hands.Run = delegate(string id) { Open(id, OnMac); };
             Hands.Press = delegate(byte key) { Key(key, OnMac); };
             Hands.Catalog = delegate
