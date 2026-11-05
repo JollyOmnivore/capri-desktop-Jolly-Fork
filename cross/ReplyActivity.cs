@@ -15,7 +15,7 @@ namespace CapriDesktop
             if (result == null)
             {
                 Tools++; Active = true;
-                Label = tool == "bash" ? "Running a command" : tool == "read" ? "Reading a file" : tool == "write" || tool == "edit" ? "Updating a file" : tool == "web_search" ? "Searching the web" : tool == "open_website" ? "Opening a page" : tool == "look_at_screen" ? "Looking at your screen" : tool == "open_app" ? "Opening an app" : tool == "mini_game" ? "Updating the game" : tool == "capri_settings" ? "Updating settings" : "Running an action";
+                Label = tool.StartsWith("computer_", StringComparison.Ordinal) ? "Using the computer" : tool == "bash" ? "Running a command" : tool == "read" ? "Reading a file" : tool == "write" || tool == "edit" ? "Updating a file" : tool == "web_search" ? "Searching the web" : tool == "open_website" ? "Opening a page" : tool == "look_at_screen" ? "Looking at your screen" : tool == "open_app" ? "Opening an app" : tool == "mini_game" ? "Updating the game" : tool == "capri_settings" ? "Updating settings" : "Running an action";
             }
             else
             {

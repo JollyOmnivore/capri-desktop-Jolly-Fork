@@ -262,7 +262,7 @@ namespace CapriDesktop
         internal void Point(PixelPoint at)
         {
             tip = at;
-            double scale = RenderScaling > 0 ? RenderScaling : 1;
+            double scale = OperatingSystem.IsMacOS() ? 1 : RenderScaling > 0 ? RenderScaling : 1;
             Position = new PixelPoint(at.X - (int)Math.Round(Reach * scale), at.Y - (int)Math.Round(Reach * scale));
             if (!IsVisible)
             {
@@ -343,6 +343,7 @@ namespace CapriDesktop
         // On X11 and XWayland an empty input shape lets every click fall through to the window under her pointer.
         private void PassThrough()
         {
+            if (OperatingSystem.IsMacOS()) { MacOverlay.ClickThrough(this); return; }
             if (passThrough || !OperatingSystem.IsLinux()) return;
             try
             {

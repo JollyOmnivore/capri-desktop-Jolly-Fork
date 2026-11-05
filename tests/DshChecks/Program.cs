@@ -41,6 +41,13 @@ Task serving = Task.Run(async () =>
         requests.Add(request);
         reached.TrySetResult();
         if (mode == "stall") continue;
+        if (mode == "provider-error")
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.OutputStream.WriteAsync(Encoding.UTF8.GetBytes("{\"error\":{\"message\":\"fixture model cannot process this request\"}}"));
+            context.Response.Close();
+            continue;
+        }
         object delta;
         string finish = "tool_calls";
         if (mode == "bridge" && step < plan.Count)
@@ -64,6 +71,7 @@ Task serving = Task.Run(async () =>
             delta = new { role = "assistant", tool_calls = new[] { new { index = 0, id = "symlink", type = "function", function = new { name = "read", arguments = JsonSerializer.Serialize(new { file_path = "outside/secret.txt" }) } } } };
         else if (mode == "escalation" && step == 0)
             delta = new { role = "assistant", tool_calls = new[] { new { index = 0, id = "escalation", type = "function", function = new { name = "bash", arguments = JsonSerializer.Serialize(new { command = "printf blocked > escalation.txt", description = "Request unsupported escalation", sandbox_permissions = "danger-full-access", justification = "Test only" }) } } } };
+        else if (mode == "max-tokens") { delta = new { role = "assistant", reasoning_content = "Synthetic reasoning only." }; finish = "length"; }
         else { delta = new { role = "assistant", content = "Finished the test." }; finish = "stop"; }
         step++;
         string Frame(object change, string reason) => "data: " + JsonSerializer.Serialize(new { id = "test", @object = "chat.completion.chunk", created = 1, model = "qwen3.5:9b", choices = new[] { new { index = 0, delta = change, finish_reason = reason } } }) + "\n\n";
@@ -97,6 +105,16 @@ try
     Check(activity.SequenceEqual(new[] { "read:start", "read:end", "write:start", "write:end", "bash:start", "bash:end" }), "actual tool events reach Capri activity callbacks in order");
     Check(requests[0].Contains("Keep the custom personality.") && requests.Any(x => x.Contains("test file content")), "custom personality and real read result reach the local model");
     Check(requests.All(x => !x.Contains("fake-private-key")), "private inherited credentials never enter model requests");
+    mode = "provider-error"; step = 0;
+    string failure = "";
+    try { Ask((tool, arguments, cwd, stop) => Task.FromResult(false)); } catch (Exception error) { failure = error.Message; }
+    Check(failure.Contains("fixture model cannot process this request"), "actual provider failure survives the DSH terminal event instead of becoming an empty reply");
+    mode = "max-tokens"; step = 0; failure = "";
+    try { Ask((tool, arguments, cwd, stop) => Task.FromResult(false)); } catch (Exception error) { failure = error.Message; }
+    Check(failure.Contains("output-token limit"), "reasoning-only output limit reports the actual stop reason without retrying actions");
+    DshTools desktop = new DshTools("Use computer tools", (tool, values) => "unused", computer: true);
+    var desktopNames = desktop.Schemas.Select(d => d.GetProperty("name").GetString()).ToArray();
+    Check(!desktopNames.Contains("list_windows") && !desktopNames.Contains("shortcut") && !desktopNames.Contains("app_window") && desktopNames.Contains("open_app"), "computer mode removes overlapping legacy Automation controls while retaining the native app launcher");
     mode = "denied"; step = 0;
     Ask((tool, arguments, cwd, stop) => Task.FromResult(false));
     Check(!File.Exists(Path.Combine(workspace, "denied.txt")), "denied write has no file effect");

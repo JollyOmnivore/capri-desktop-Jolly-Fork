@@ -1,3 +1,4 @@
+import { mountComputer } from './computer.mjs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { mkdirSync, writeFileSync, realpathSync, existsSync, lstatSync, readFileSync } from 'node:fs';
@@ -8,14 +9,14 @@ const require = createRequire(join(root, 'package.json'));
 for (const name of ['dsh', 'dsh-llm-pi-ai', 'dsh-sdk-jsonrpc-server', 'dsh-tools', 'dsh-fs-sandbox', 'dsh-bash-sandbox', 'dsh-sandbox-local']) {
     if (JSON.parse(readFileSync(join(root, 'node_modules', '@deepseek-ai', name, 'package.json'), 'utf8')).version !== '0.2.1-rc.5') throw new Error('Install the pinned Capri DSH runtime with npm ci');
 }
-const load = name => import(pathToFileURL(require.resolve(name)).href);
+const load = name => import(pathToFileURL(name === '@trycua/cua-driver' ? join(root, 'node_modules', '@trycua', 'cua-driver', 'dist', 'index.js') : require.resolve(name)).href);
 const { JsonRpcLineTransport } = await load('@deepseek-ai/dsh-sdk-protocol');
 const { HarnessSdkJsonRpcServer } = await load('@deepseek-ai/dsh-sdk-jsonrpc-server');
 const { runProfile } = await load('@deepseek-ai/dsh/profile-boot');
 const { createLaunchEnvironmentSnapshot } = await load('@deepseek-ai/dsh-launch-environment');
 const { validateJsonSchemaValue } = await load('@deepseek-ai/dsh-tools');
 const transport = new JsonRpcLineTransport(process.stdin, process.stdout);
-let server, runtime, initialized = false, calls = 0;
+let server, runtime, computer, initialized = false, calls = 0;
 const deny = reason => ({ kind: 'deny', reason });
 
 function confinedPath(workspace, path) {
@@ -36,6 +37,14 @@ async function initialize(params) {
     initialized = true;
     if (!Number.isInteger(params.port) || params.port < 1 || params.port > 65535) throw new Error('Invalid loopback port');
     if (!/^qwen[\w.:-]*$/i.test(params.model ?? '') && !/^[\w.][\w.\/:+-]{0,199}$/.test(params.model ?? '')) throw new Error('Invalid local model');
+    let vision = false;
+    if (params.computer === true) {
+        if (JSON.parse(readFileSync(join(root, 'node_modules', '@trycua', 'cua-driver', 'package.json'), 'utf8')).version !== '0.28.0') throw new Error('Reinstall the pinned Capri computer driver');
+        try {
+            const response = await fetch(`http://127.0.0.1:${params.port}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: params.model }), signal: AbortSignal.timeout(3000) });
+            vision = response.ok && (await response.json()).capabilities?.includes('vision') === true;
+        } catch {}
+    }
     const workspace = realpathSync(params.cwd);
     if (lstatSync(params.cwd).isSymbolicLink()) throw new Error('Choose a workspace directory rather than a symlink');
     const home = process.env.DSH_HOME;
@@ -52,7 +61,7 @@ async function initialize(params) {
         { id: 'capri-bash-tool', name: '@deepseek-ai/dsh-tool-bash', config: { enableRunInBackground: false, promoteOnTimeout: false } },
         { id: 'capri-local-model', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: { 'capri-local': {
             api: 'openai-completions', baseURL: `http://127.0.0.1:${params.port}/v1`, apiKeyEnv: 'CAPRI_LOCAL_MODEL_KEY',
-            models: [{ id: params.model, contextWindow: 32768, maxTokens: 4096, input: ['text'] }],
+            models: [{ id: params.model, contextWindow: 32768, maxTokens: 4096, input: vision ? ['text', 'image'] : ['text'] }],
             compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens' },
             timeoutMs: 120000, streamIdleTimeoutMs: 120000, retryPolicy: { mode: 'normal', maxRetries: 0 }
         } } } }
@@ -60,6 +69,10 @@ async function initialize(params) {
     const patch = join(home, 'capri.patch.json');
     writeFileSync(patch, JSON.stringify(patches), { mode: 0o600 });
     runtime = await runProfile({ profile: 'sdk-minimal', patchFiles: [patch], args: [], environment: createLaunchEnvironmentSnapshot([{ source: 'process', values: { ...process.env } }]) });
+    if (params.computer === true) {
+        await runtime.ctx.plugin((await load('@deepseek-ai/dsh-computer-use')).default);
+        computer = await mountComputer(runtime.ctx, load, transport, { hostPid: params.hostPid, vision });
+    }
     const bridged = new Map();
     for (const tool of params.tools ?? []) {
         if (!/^[a-z][a-z_]{0,63}$/.test(tool.name) || runtime.ctx.tools.get(tool.name) || bridged.has(tool.name)) throw new Error('Conflicting Capri tool');
@@ -76,11 +89,11 @@ async function initialize(params) {
         });
     }
     runtime.ctx.on('tools/pre-execute', async (exec, next) => {
-        if (!['read', 'write', 'edit', 'bash'].includes(exec.name) && !bridged.has(exec.name)) return deny('Tool is not enabled in Capri');
+        if (!['read', 'write', 'edit', 'bash'].includes(exec.name) && !bridged.has(exec.name) && !computer?.names.has(exec.name)) return deny('Tool is not enabled in Capri');
         if (exec.arguments?.sandbox_permissions && exec.arguments.sandbox_permissions !== 'workspace-write') return deny('Sandbox escalation is not enabled in Capri');
-        if (++calls > 12) return deny('Tool limit reached; ask the user to continue in another turn');
+        if (++calls > (computer ? 24 : 12)) return deny('Tool limit reached; ask the user to continue in another turn');
         if (params.toolMode !== 'all' && exec.name !== 'web_search' && (params.toolMode !== 'search-open' || exec.name !== 'open_website')) return deny('This turn is limited to the requested web search');
-        if (bridged.has(exec.name)) return await next();
+        if (bridged.has(exec.name) || computer?.names.has(exec.name)) return await next();
         if (exec.name !== 'bash' && !confinedPath(workspace, exec.arguments?.file_path)) return deny('File must be inside the selected workspace');
         if (exec.signal.aborted) return { kind: 'cancel' };
         try {
@@ -100,8 +113,9 @@ transport.onRequest(async (method, params) => {
     if (!server) throw new Error('Initialize Capri first');
     if (!['session/prompt', 'session/wait', 'shutdown'].includes(method)) throw new Error('Unsupported Capri method');
     const result = await server.handleRequest(method, params);
-    if (method === 'shutdown') setImmediate(() => runtime.shutdown.shutdown(0));
+    if (method === 'session/wait') computer?.verify();
+    if (method === 'shutdown') { await computer?.close(); computer = null; setImmediate(() => runtime.shutdown.shutdown(0)); }
     return result;
 });
-process.stdin.on('end', () => { transport.close(); runtime?.shutdown.shutdown(0); });
+process.stdin.on('end', async () => { transport.close(); await computer?.close(); computer = null; runtime?.shutdown.shutdown(0); });
 transport.start();

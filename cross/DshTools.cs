@@ -20,7 +20,7 @@ namespace CapriDesktop
         internal string Mode { get; private set; } = "all";
         internal JsonElement[] Schemas { get { return offered.Values.ToArray(); } }
 
-        internal DshTools(string request, Func<string, ToolArguments, string> action, Func<bool> current = null)
+        internal DshTools(string request, Func<string, ToolArguments, string> action, Func<bool> current = null, bool computer = false)
         {
             Request = request;
             this.action = action;
@@ -33,6 +33,7 @@ namespace CapriDesktop
             {
                 JsonElement definition = entry.GetProperty("function");
                 string name = definition.GetProperty("name").GetString();
+                if (computer && (name == "list_windows" || name == "shortcut" || name == "app_window")) continue;
                 if (Bridged.Contains(name)) offered.Add(name, definition.Clone());
             }
         }

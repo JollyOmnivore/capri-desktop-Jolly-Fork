@@ -3964,7 +3964,13 @@ namespace CapriDesktop
                 bool failed = false;
                 try { said = think != null ? think(text) : useDsh ? AskDsh(text, revision) : Brain.Ask(text, follows, out after); }
                 catch (BrainException error) { failed = true; said = error.Message == Brain.Offline ? Offline : error.Told ? error.Message : "My brain couldn't answer: " + error.Message; stuck = Brain.Stalled(error); }
-                catch (Exception error) { failed = true; said = useDsh ? error is OperationCanceledException ? "That DSH turn stopped. Check any completed actions before retrying." : "DSH couldn't finish: " + error.Message : Brain.Explain(error, remote) ?? "That reply was cancelled. Try again."; stuck = Brain.Stalled(error); }
+                catch (Exception error)
+                {
+                    failed = true;
+                    said = useDsh ? error is OperationCanceledException ? "That DSH turn stopped. Check any completed actions before retrying." : "DSH couldn't finish: " + Brain.Redacted(error.Message) : Brain.Explain(error, remote) ?? "That reply was cancelled. Try again.";
+                    if (useDsh && !(error is OperationCanceledException)) Brain.Log("DSH", -1, error.Message);
+                    stuck = Brain.Stalled(error);
+                }
                 if (string.IsNullOrWhiteSpace(said)) { failed = true; said = "My brain sent an empty reply. Try again."; }
                 Dispatcher.UIThread.Post(delegate
                 {

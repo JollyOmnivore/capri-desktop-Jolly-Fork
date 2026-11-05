@@ -16,6 +16,7 @@ namespace CapriDesktop
         public string Runtime { get; set; } = "";
         public string Workspace { get; set; } = "";
         public int Port { get; set; } = 11434;
+        public bool Computer { get; set; }
 
         internal static DshOptions Read(string folder)
         {
@@ -31,6 +32,7 @@ namespace CapriDesktop
     internal sealed class DshBrain
     {
         private readonly object gate = new object();
+        private static readonly SemaphoreSlim desktopLease = new SemaphoreSlim(1, 1);
         private CancellationTokenSource active;
 
         internal void Cancel()
@@ -63,21 +65,42 @@ namespace CapriDesktop
             return info;
         }
 
-        internal string Ask(DshOptions options, string bridge, string home, string model, string persona, string text, List<ChatMessage> history, Func<string, string, string, CancellationToken, Task<bool>> approve, Action<string, string> activity, Func<bool> current = null, DshTools tools = null)
+        internal string Ask(DshOptions options, string bridge, string home, string model, string persona, string text, List<ChatMessage> history, Func<string, string, string, CancellationToken, Task<bool>> approve, Action<string, string> activity, Func<bool> current = null, DshTools tools = null, DshComputer computer = null)
         {
             using CancellationTokenSource stop = new CancellationTokenSource(TimeSpan.FromMinutes(5));
             lock (gate) { if (current != null && !current()) throw new OperationCanceledException(); active?.Cancel(); active = stop; }
-            try { return Run(options, bridge, home, model, persona, text, history, approve, activity, stop.Token, tools).GetAwaiter().GetResult(); }
-            finally { lock (gate) if (active == stop) active = null; }
+            bool leased = false;
+            try
+            {
+                if (options.Computer) { desktopLease.Wait(stop.Token); leased = true; }
+                return Run(options, bridge, home, model, persona, text, history, approve, activity, stop.Token, tools, computer).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                if (leased) desktopLease.Release();
+                lock (gate) if (active == stop) active = null;
+            }
         }
 
-        private static async Task<string> Run(DshOptions options, string bridge, string home, string model, string persona, string text, List<ChatMessage> history, Func<string, string, string, CancellationToken, Task<bool>> approve, Action<string, string> activity, CancellationToken stop, DshTools tools)
+        private static async Task<string> Run(DshOptions options, string bridge, string home, string model, string persona, string text, List<ChatMessage> history, Func<string, string, string, CancellationToken, Task<bool>> approve, Action<string, string> activity, CancellationToken stop, DshTools tools, DshComputer computer)
         {
-            using Process process = new Process { StartInfo = StartInfo(options, bridge, Path.Combine(home, "runs", Guid.NewGuid().ToString("N"))) };
+            string runHome = Path.Combine(home, "runs", Guid.NewGuid().ToString("N"));
+            using Process process = new Process { StartInfo = StartInfo(options, bridge, runHome) };
             stop.ThrowIfCancellationRequested();
             process.Start();
             Task errors = Drain(process.StandardError);
-            string session = Guid.NewGuid().ToString("N"), reply = null;
+            string session = Guid.NewGuid().ToString("N"), reply = null, turnProblem = null, lastFailure = null;
+            if (computer != null && approve != null)
+            {
+                var approval = approve;
+                approve = async (tool, arguments, cwd, token) =>
+                {
+                    await computer.Wait(token);
+                    bool allowed = await approval(tool, arguments, cwd, token);
+                    if (allowed) await computer.Wait(token);
+                    return allowed;
+                };
+            }
             int counter = 0;
             Dictionary<string, string> calls = new Dictionary<string, string>();
             Dictionary<string, string> outcomes = new Dictionary<string, string>();
@@ -113,10 +136,22 @@ namespace CapriDesktop
                                 await Send(new { jsonrpc = "2.0", id = request.Clone(), result = new { text = result, isError = Hands.Failed(result) || Security.IsHold(result) } });
                                 continue;
                             }
+                            if (incoming == "capri/computer")
+                            {
+                                if (!options.Computer || computer == null) throw new InvalidOperationException("Computer use is disabled.");
+                                await computer.Update(frame.GetProperty("params"), stop);
+                                await Send(new { jsonrpc = "2.0", id = request.Clone(), result = new { ready = true } });
+                                continue;
+                            }
                             bool allowed = false;
                             if (incoming == "capri/approval" && approve != null)
                             {
                                 JsonElement args = frame.GetProperty("params");
+                                if (args.GetProperty("tool").GetString().StartsWith("computer_", StringComparison.Ordinal))
+                                {
+                                    if (!options.Computer || computer == null) throw new InvalidOperationException("Computer use is disabled.");
+                                    await computer.Announce(args.GetProperty("tool").GetString(), stop);
+                                }
                                 allowed = await approve(args.GetProperty("tool").GetString(), args.GetProperty("arguments").GetRawText(), args.GetProperty("cwd").GetString(), stop);
                             }
                             stop.ThrowIfCancellationRequested();
@@ -129,6 +164,7 @@ namespace CapriDesktop
                             JsonElement entry = data.GetProperty("event"), value = entry.GetProperty("data");
                             string kind = entry.GetProperty("type").GetString();
                             if (kind == "assistant/message") reply = Text(value.GetProperty("message").GetProperty("content"));
+                            else if (kind == "turn/end") turnProblem = TurnProblem(value.GetProperty("reason"));
                             else if (kind == "tool/call")
                             {
                                 string tool = value.GetProperty("name").GetString();
@@ -139,7 +175,10 @@ namespace CapriDesktop
                             {
                                 JsonElement message = value.GetProperty("message");
                                 string call = message.GetProperty("toolCallId").GetString();
-                                if (calls.TryGetValue(call, out string tool)) activity?.Invoke(tool, outcomes.TryGetValue(call, out string outcome) ? outcome : message.TryGetProperty("isError", out JsonElement bad) && bad.GetBoolean() ? "Couldn't finish that action." : "Finished.");
+                                bool failed = message.TryGetProperty("isError", out JsonElement bad) && bad.GetBoolean();
+                                string detail = failed ? "Couldn't finish " + (calls.TryGetValue(call, out string called) ? called : "that action") + ": " + SafeProblem(Text(message.GetProperty("content"))) : "Finished.";
+                                if (failed) lastFailure = detail;
+                                if (calls.TryGetValue(call, out string tool)) activity?.Invoke(tool, outcomes.TryGetValue(call, out string outcome) ? outcome : detail);
                             }
                         }
                     }
@@ -152,7 +191,7 @@ namespace CapriDesktop
             }
             try
             {
-                JsonElement hello = await Request("capri/initialize", new { cwd = options.Workspace, port = options.Port, model, persona, tools = tools?.Schemas ?? Array.Empty<JsonElement>(), toolMode = tools?.Mode ?? "all" });
+                JsonElement hello = await Request("capri/initialize", new { cwd = options.Workspace, port = options.Port, model, persona, tools = tools?.Schemas ?? Array.Empty<JsonElement>(), toolMode = tools?.Mode ?? "all", computer = options.Computer && computer != null, hostPid = Environment.ProcessId });
                 if (hello.GetProperty("serverInfo").GetProperty("name").GetString() != "deepseek-harness-sdk-runtime") throw new InvalidDataException("Unexpected DSH runtime.");
                 StringBuilder prompt = new StringBuilder();
                 foreach (ChatMessage message in history.TakeLast(12))
@@ -160,8 +199,9 @@ namespace CapriDesktop
                 string context = prompt.Length == 0 ? "" : "Previous conversation for context; do not repeat previous actions:\n" + prompt + "\nCurrent request:\n";
                 await Request("session/prompt", new { sessionId = session, contentBlocks = new[] { new { type = "text", text = context + text } } });
                 await Request("session/wait", new { sessionId = session });
+                if (turnProblem != null) throw new InvalidOperationException(turnProblem + (lastFailure == null ? "" : " Last tool error: " + lastFailure));
                 tools?.VerifyCompletion();
-                if (string.IsNullOrWhiteSpace(reply)) throw new InvalidOperationException("DSH completed without a text reply. Check the action results before trying again.");
+                if (string.IsNullOrWhiteSpace(reply)) throw new InvalidOperationException(lastFailure ?? "The local model ended without a visible reply. No action was retried.");
                 return reply;
             }
             finally
@@ -174,6 +214,7 @@ namespace CapriDesktop
                 }
                 catch { try { if (!process.HasExited) process.Kill(true); } catch (Exception) { } }
                 try { await errors.WaitAsync(TimeSpan.FromSeconds(1)); } catch (Exception) { }
+                if (options.Computer) try { Directory.Delete(runHome, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             }
         }
 
@@ -181,6 +222,21 @@ namespace CapriDesktop
         {
             char[] buffer = new char[4096];
             while (await reader.ReadAsync(buffer, 0, buffer.Length) > 0) { }
+        }
+
+        internal static string TurnProblem(JsonElement reason)
+        {
+            string kind = reason.GetProperty("kind").GetString();
+            if (kind == "completed") return null;
+            if (kind == "max-tokens") return "The local model reached its output-token limit before finishing. Inspect any completed actions before retrying.";
+            if (kind == "error" && reason.TryGetProperty("error", out JsonElement error) && error.TryGetProperty("message", out JsonElement message)) return SafeProblem(message.GetString());
+            return "DSH turn ended as " + kind + ". Inspect any completed actions before retrying.";
+        }
+
+        private static string SafeProblem(string text)
+        {
+            string clean = Brain.Redacted(text ?? "Unknown tool error");
+            return clean.Length > 1200 ? clean.Substring(0, 1200) + "…" : clean;
         }
 
         private static string Text(JsonElement blocks)
