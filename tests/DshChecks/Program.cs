@@ -87,7 +87,7 @@ try
     string workspace = Path.Combine(scratch, "workspace");
     Directory.CreateDirectory(workspace);
     File.WriteAllText(Path.Combine(workspace, "sample.txt"), "test file content");
-    DshOptions options = new DshOptions { Node = "/usr/local/bin/node", Runtime = root, Workspace = workspace, Port = port };
+    DshOptions options = new DshOptions { Node = "/usr/local/bin/node", Runtime = root, Workspace = workspace, Port = port, Trace = true };
     string old = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
     Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "fake-private-key");
     var info = DshBrain.StartInfo(options, bridge, Path.Combine(scratch, "home"));
@@ -105,6 +105,13 @@ try
     Check(activity.SequenceEqual(new[] { "read:start", "read:end", "write:start", "write:end", "bash:start", "bash:end" }), "actual tool events reach Capri activity callbacks in order");
     Check(requests[0].Contains("Keep the custom personality.") && requests.Any(x => x.Contains("test file content")), "custom personality and real read result reach the local model");
     Check(requests.All(x => !x.Contains("fake-private-key")), "private inherited credentials never enter model requests");
+    string tracePath = Path.Combine(scratch, "home", "activity.jsonl");
+    string recorded = File.ReadAllText(tracePath);
+    Check(recorded.Contains("tool.call") && recorded.Contains("tool.result") && recorded.Contains("assistant.reply") && recorded.Contains("approval.result"), "local activity trace records visible replies, tool calls, results and approvals");
+    using (DshTrace privacy = new DshTrace(Path.Combine(scratch, "privacy"), true)) privacy.Write("fixture", new { password = "private-password-fixture", arguments = "{\"api_key\":\"private-key-fixture\"}", image = new { type = "image", data = "private-image-fixture" }, reasoning = new { type = "reasoning", text = "private-reasoning-fixture" }, token = "private-token-fixture" });
+    string scrubbed = File.ReadAllText(Path.Combine(scratch, "privacy", "activity.jsonl"));
+    Check(!scrubbed.Contains("private-") && scrubbed.Contains("redacted") && scrubbed.Contains("omitted"), "trace redacts nested credentials and omits image payloads and reasoning");
+    Check((File.GetUnixFileMode(tracePath) & (UnixFileMode.GroupRead | UnixFileMode.OtherRead | UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) == 0, "activity logs are private to the current user");
     mode = "provider-error"; step = 0;
     string failure = "";
     try { Ask((tool, arguments, cwd, stop) => Task.FromResult(false)); } catch (Exception error) { failure = error.Message; }
@@ -115,6 +122,11 @@ try
     DshTools desktop = new DshTools("Use computer tools", (tool, values) => "unused", computer: true);
     var desktopNames = desktop.Schemas.Select(d => d.GetProperty("name").GetString()).ToArray();
     Check(!desktopNames.Contains("list_windows") && !desktopNames.Contains("shortcut") && !desktopNames.Contains("app_window") && desktopNames.Contains("open_app"), "computer mode removes overlapping legacy Automation controls while retaining the native app launcher");
+    Check(!DshTools.ComputerRequested("How does computer use work?") && DshTools.ComputerRequested("Could you use computer tools to inspect Calculator?"), "informational questions do not trigger mandatory desktop observation");
+    DshTools readOnlyDesktop = new DshTools("Use computer tools to inspect Calculator. Don’t click or type.", (tool, values) => "unused", computer: true);
+    Check(readOnlyDesktop.Mode == "computer" && readOnlyDesktop.ComputerReadOnly && readOnlyDesktop.Schemas.Length == 0, "explicit read-only computer requests cannot use native action or file tools");
+    DshTools clickDesktop = new DshTools("Use computer tools to click 7. Don’t type or use shortcuts.", (tool, values) => "unused", computer: true);
+    Check(clickDesktop.Mode == "computer" && !clickDesktop.ComputerReadOnly, "a prohibition on typing does not block an explicitly requested click");
     mode = "denied"; step = 0;
     Ask((tool, arguments, cwd, stop) => Task.FromResult(false));
     Check(!File.Exists(Path.Combine(workspace, "denied.txt")), "denied write has no file effect");

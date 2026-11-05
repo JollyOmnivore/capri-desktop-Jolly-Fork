@@ -25,6 +25,8 @@ check('unlisted windows refused', () => assert.throws(() => policy.prepare('clic
 check('foreground fallback refused', () => assert.throws(() => policy.prepare('click', { ...click, delivery_mode: 'foreground' })));
 check('stale token refused', () => assert.throws(() => policy.prepare('click', { ...click, element_token: 'old' })));
 check('wrong snapshot id refused', () => assert.throws(() => policy.prepare('click', { ...args, element_index: 3, snapshot_id: 'old' })));
+check('index without snapshot binds only to the current fresh snapshot', () => { const p = policy.prepare('click', { ...args, element_index: 3 }); assert.equal(p.args.snapshot_id, data.snapshot_id); assert.equal(p.visual.x, -350); });
+check('unknown index cannot bind to the current snapshot', () => assert.throws(() => policy.prepare('click', { ...args, element_index: 999 })));
 check('out of bounds coordinates refused', () => assert.throws(() => policy.prepare('click', { ...args, x: 600, y: 0 })));
 check('unanchored typing refused', () => assert.throws(() => policy.prepare('type_text', { ...args, text: 'test' })));
 check('oversized typing refused', () => assert.throws(() => policy.prepare('type_text', { ...click, text: 'x'.repeat(8001) })));
@@ -44,29 +46,31 @@ check('failed snapshot never authorizes input', () => { listed(); policy.accept(
 check('discovery refresh invalidates previous snapshot', () => { snapshot(); listed(); assert.throws(() => policy.prepare('click', click)); });
 
 const registered = new Map(), events = [], calls = [];
-let allowed = true, aborted = false, permissions = true, holdApproval;
+let allowed = true, aborted = false, permissions = true, screenPermission = true, holdApproval;
 const driver = { listToolsJson: async () => JSON.stringify({ tools: [...computerNames, 'clipboard_read'].map(name => ({ name, inputSchema: { type: 'object', properties: { pid: {}, window_id: {}, target: {}, scope: {}, screenshot_out_file: {}, debug_image_out: {}, session: {}, include_screenshot: {} } } })) }),
-    async callTool(name) { if (name === 'check_permissions') return { rawJson: JSON.stringify(result({ accessibility: permissions, screen_recording: permissions })) }; calls.push(name); return { rawJson: JSON.stringify(name === 'list_windows' ? result({ windows: [window] }) : name === 'get_window_state' ? result(data) : result({ effect: 'delivered' })) }; }, shutdown: async () => events.push('shutdown'), uniffiDestroy: () => events.push('destroy') };
+    async callTool(name) { if (name === 'check_permissions') return { rawJson: JSON.stringify(result({ accessibility: permissions, screen_recording: screenPermission })) }; calls.push(name); return { rawJson: JSON.stringify(name === 'list_windows' ? result({ windows: [window] }) : name === 'get_window_state' ? result(data) : result({ effect: 'delivered' })) }; }, shutdown: async () => events.push('shutdown'), uniffiDestroy: () => events.push('destroy') };
 const load = async name => name === '@trycua/cua-driver' ? { CuaDriver: { create: () => driver } } : { createMcpToolDefinition: (_ctx, definition) => definition };
 const ctx = { tools: { register: d => { registered.set(d.name, d); return () => registered.delete(d.name); } }, computerUse: { register: () => {} }, systemPrompt: { section: () => {} } };
-const transport = { async request(method) { events.push(method); if (method === 'capri/approval') { if (holdApproval) await holdApproval; return { allowed }; } if (aborted) controller.abort(); return { ready: true }; } };
+const transport = { notify() {}, async request(method) { events.push(method); if (method === 'capri/approval') { if (holdApproval) await holdApproval; return { allowed }; } if (aborted) controller.abort(); return { ready: true }; } };
 const runtime = await mountComputer(ctx, load, transport, { hostPid: 99, vision: true });
 check('driver catalog filtered before registration', () => { assert.equal(registered.size, 7); assert(!registered.has('computer_clipboard_read')); });
 check('unsafe schema fields removed', () => assert(!('target' in registered.get('computer_click').inputSchema.properties)));
 let controller = new AbortController();
 const call = (name, value) => registered.get('computer_' + name).call(value, { signal: controller.signal });
 await call('list_windows', {}); await call('get_window_state', args);
-await call('click', click);
+await call('click', { ...args, element_index: 3 });
 check('completion without observation is refused', () => assert.throws(() => runtime.verify()));
 check('approval and visual ack precede driver input', () => assert.deepEqual(events.slice(-3), ['capri/approval', 'capri/computer', 'capri/computer']));
 await assert.rejects(call('click', click)); checks++; console.log('PASS repeated input blocked in mounted provider');
-await call('get_window_state', args);
+const observed = await call('get_window_state', args);
+check('fresh observation describes the last attempted target without asserting success', () => { const feedback = JSON.parse(observed.content.at(-1).text); assert.equal(feedback.last_attempted_input.element_index, 3); assert.deepEqual(feedback.last_attempted_input.desktop_point, { x: -310, y: 165 }); assert.equal(feedback.targets_from_current_snapshot[0].element_token, 'fresh'); assert(feedback.guidance.includes('not proof of success')); });
 check('fresh observation clears pending verification', () => assert.doesNotThrow(() => runtime.verify()));
 allowed = false; const before = calls.length;
 await assert.rejects(call('click', click));
 check('denial sends no native input', () => assert.equal(calls.length, before));
 allowed = true; permissions = false;
-await assert.rejects(call('get_window_state', args), /permissions/);
+await assert.rejects(call('get_window_state', args), error => error.message.includes('Accessibility') && !error.message.includes('Screen Recording'));
+checks++; console.log('PASS missing Accessibility does not falsely claim Screen Recording is missing');
 check('missing permissions block observation without a prompt or native input', () => assert.equal(calls.length, before));
 permissions = true; aborted = true;
 await assert.rejects(call('click', click));
@@ -79,4 +83,7 @@ checks++; console.log('PASS concurrent computer calls are rejected before approv
 release(); await first;
 await runtime.close(); await runtime.close();
 check('shutdown unregisters tools and destroys driver', () => { assert.equal(registered.size, 0); assert.deepEqual(events.slice(-2), ['shutdown', 'destroy']); });
+const readOnlyRuntime = await mountComputer(ctx, load, transport, { hostPid: 99, vision: true, readOnly: true });
+check('read-only desktop requests expose observation tools only', () => { assert.equal(registered.size, 3); assert(!registered.has('computer_click')); assert(!registered.has('computer_type_text')); assert(!registered.has('computer_press_key')); });
+await readOnlyRuntime.close();
 console.log(checks + ' computer policy checks passed');

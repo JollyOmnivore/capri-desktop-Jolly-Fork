@@ -57,10 +57,19 @@ internal sealed class ComputerTestApp : Application
                     Check(Bool(native, sel_registerName("ignoresMouseEvents")), overlay.Title + " passes native mouse clicks through");
                 }
                 Check(cursor.Position == new PixelPoint(90, 130), "Mac cursor tip aligns with the highlighted target on Retina");
+                using JsonDocument delivered = JsonDocument.Parse("{\"phase\":\"after\",\"tool\":\"computer_click\"}");
+                await computer.Update(delivered.RootElement, cancel.Token);
+                Check(cursor.IsVisible && cursor.Position == new PixelPoint(90, 130), "cursor remains at the last attempted point after input");
                 Console.WriteLine("SCREEN " + target.Screens.Primary.Bounds + " scale=" + target.RenderScaling);
                 using JsonDocument capture = JsonDocument.Parse("{\"phase\":\"before\",\"tool\":\"computer_get_window_state\",\"target\":null}");
                 await computer.Update(capture.RootElement, cancel.Token);
                 Check(!target.IsVisible && !cursor.IsVisible, "visual overlays hide before observation");
+                using JsonDocument observed = JsonDocument.Parse("{\"phase\":\"after\",\"tool\":\"computer_get_window_state\"}");
+                await computer.Update(observed.RootElement, cancel.Token);
+                Check(cursor.IsVisible && !target.IsVisible && cursor.Position == new PixelPoint(90, 130), "last attempted cursor returns after observation without obscuring the capture");
+                using JsonDocument failed = JsonDocument.Parse("{\"phase\":\"failed\",\"tool\":\"computer_click\"}");
+                await computer.Update(failed.RootElement, cancel.Token);
+                Check(cursor.IsVisible, "failed operation retains the last attempted cursor until turn cleanup");
                 computer.TogglePause();
                 Task stopped = computer.Wait(cancel.Token);
                 cancel.Cancel();

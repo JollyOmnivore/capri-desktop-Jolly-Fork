@@ -19,6 +19,7 @@ namespace CapriDesktop
         private bool ended;
         private Window strip, target;
         private HerCursor cursor;
+        private PixelPoint? lastPoint;
         private TextBlock status, detail;
         private Button pause;
         private string phase = "Preparing desktop tools";
@@ -76,7 +77,7 @@ namespace CapriDesktop
                 phase = step == "before" ? Label(tool) : step == "failed" ? "Action failed · no automatic retry" : "Checking the result";
                 status.Text = Paused ? "Paused · no new input" : phase;
                 detail.Text = step == "before" ? "Exact window · background delivery" : "Capri must observe fresh state before the next input";
-                HideTargets();
+                if (step == "before") HideTargets();
                 if (step == "before" && message.TryGetProperty("target", out JsonElement box) && box.ValueKind == JsonValueKind.Object)
                 {
                     double x = box.GetProperty("x").GetDouble(), y = box.GetProperty("y").GetDouble(), w = box.GetProperty("width").GetDouble(), h = box.GetProperty("height").GetDouble();
@@ -85,9 +86,15 @@ namespace CapriDesktop
                     target.Width = w; target.Height = h;
                     target.Show();
                     cursor ??= new HerCursor();
-                    cursor.Point(new PixelPoint((int)Math.Round(x + w / 2), (int)Math.Round(y + h / 2)));
+                    lastPoint = new PixelPoint((int)Math.Round(x + w / 2), (int)Math.Round(y + h / 2));
+                    cursor.Point(lastPoint.Value);
                     cursor.Tap();
                     detail.Text = box.GetProperty("app").GetString() + " · highlighted target";
+                }
+                else if (step != "before" && lastPoint.HasValue)
+                {
+                    cursor.Point(lastPoint.Value);
+                    detail.Text = "Cursor marks the last attempted target · verify the app's result";
                 }
             });
             if (message.GetProperty("phase").GetString() == "before" && message.TryGetProperty("target", out JsonElement targetBox) && targetBox.ValueKind == JsonValueKind.Object) await Task.Delay(300, token);

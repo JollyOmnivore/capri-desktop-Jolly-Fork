@@ -46,7 +46,7 @@ internal sealed class DshTestApp : Application
             await Task.Delay(80);
             Check(settings.GetVisualDescendants().OfType<CheckBox>().Single(x => Equals(x.Content, "Use DSH for typed and push-to-talk chat")).IsChecked == false, "backend menu opens a disabled experimental option");
             Check(settings.GetVisualDescendants().OfType<CheckBox>().Single(x => ((string)x.Content).StartsWith("Enable computer use")).IsChecked == false, "computer use is an explicit opt-in in backend setup");
-            Check(settings.GetVisualDescendants().OfType<Button>().Any(x => Equals(x.Content, "Request Mac permissions")), "Mac permissions have an explicit user-operated setup button");
+            Check(settings.GetVisualDescendants().OfType<Button>().Any(x => Equals(x.Content, "Mac permissions...")), "Mac permissions have an explicit user-operated setup button");
             Check(settings.GetVisualDescendants().OfType<TextBlock>().Any(x => (x.Text ?? "").Contains("Shell commands can read other files")), "backend setup explains shell read and network access");
             using (RenderTargetBitmap image = new RenderTargetBitmap(new PixelSize(640, 740))) { image.Render((Control)settings.Content); image.Save(Path.Combine(Entry.Folder, "dsh-settings.png")); }
             settings.GetVisualDescendants().OfType<CheckBox>().Single(x => ((string)x.Content).StartsWith("Enable computer use")).IsChecked = true;
@@ -86,6 +86,17 @@ internal sealed class DshTestApp : Application
             frame.Press("DSH setup");
             Check(desktop.Windows.Any(w => w.Title == "Capri · Experimental DSH"), "Mainframe setup button opens DSH configuration");
             desktop.Windows.Single(w => w.Title == "Capri · Experimental DSH").Close();
+            pet.OpenMacPermissions();
+            Window permissions = desktop.Windows.Single(w => w.Title == "Capri · Mac permissions");
+            await Task.Delay(150);
+            var permissionButtons = permissions.GetVisualDescendants().OfType<Button>().Select(x => x.Content as string).ToArray();
+            Check(new[] { "Request required permissions", "Request Accessibility", "Request Screen Recording", "Request Microphone", "Open Automation settings", "Open Files & Folders settings", "Refresh permission status", "Check DSH driver permissions", "View DSH activity" }.All(permissionButtons.Contains), "permissions panel exposes manual requests and privacy controls without requesting them on open");
+            Check(permissions.GetVisualDescendants().OfType<TextBlock>().Any(x => (x.Text ?? "").Contains("Ad-hoc signed")), "permissions panel explains test-build grant resets");
+            permissions.Close();
+            pet.OpenDshActivity();
+            Window activityLog = desktop.Windows.Single(w => w.Title == "Capri · DSH activity");
+            Check(activityLog.GetVisualDescendants().OfType<TextBox>().Single().IsReadOnly, "DSH activity viewer is local and read only");
+            activityLog.Close();
             options.Runtime = Path.Combine(Entry.Folder, "missing-runtime");
             File.WriteAllText(Path.Combine(Entry.Folder, "dsh.json"), JsonSerializer.Serialize(options));
             frame.Change("DSH backend", 1);

@@ -751,8 +751,9 @@ namespace CapriDesktop
 
         internal void Bring()
         {
+            if (quitting) return;
             Screen screen = Screens.Primary ?? ScreenHere();
-            if (screen == null || quitting) return;
+            if (screen == null) return;
             Halt();
             SetAway(false);
             if (!IsVisible) { Show(); Look.OnTopAgain(this); }

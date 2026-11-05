@@ -710,8 +710,7 @@ namespace CapriDesktop
                 checks.Add("PASS updates: a newer GitHub release puts Get Capri X in her right-click menu and she says so once; older releases, drafts, odd tags and other sites don't");
                 // Check my screen: the right screenshot tool for the desktop, shrunk to a JPEG, and a plain answer when no tool works.
                 List<InstalledApp> kate = new List<InstalledApp> { new InstalledApp("Kate", "exec:kate") };
-                bool toolsRight = Eyes.FreshAsk(null, "0.7.9.0") && Eyes.FreshAsk("0.7.8.0\n", "0.7.9.0") && !Eyes.FreshAsk("0.7.9.0\n", "0.7.9.0")
-                    && Hands.Match(kate, "Kate Text editor").Count == 1 && Hands.Match(kate, "Kate Bush songs").Count == 0
+                bool toolsRight = Hands.Match(kate, "Kate Text editor").Count == 1 && Hands.Match(kate, "Kate Bush songs").Count == 0
                     && Eyes.Tools(true, null, null)[0][0] == "screencapture" && Eyes.Tools(false, "x11", "XFCE")[0][0] == "import" && Eyes.Tools(false, "wayland", "KDE")[0][0] == "spectacle"
                     && Eyes.Tools(false, "wayland", "ubuntu:GNOME")[0][0] == "gnome-screenshot" && Eyes.Tools(false, "wayland", "Hyprland")[0][0] == "grim" && Eyes.Tools(false, "wayland", "Hyprland").Count == 3;
                 byte[] wideShot;

@@ -1,4 +1,8 @@
 using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading.Tasks;
+using System.Text.Json;
 using System.Runtime.InteropServices;
 
 namespace CapriDesktop
@@ -42,6 +46,59 @@ namespace CapriDesktop
                 if (key != IntPtr.Zero) CFRelease(key);
                 NativeLibrary.Free(library);
             }
+        }
+
+        internal static bool ScreenAllowed() { return OperatingSystem.IsMacOS() && CGPreflightScreenCaptureAccess(); }
+
+        internal static void RequestScreen() { if (OperatingSystem.IsMacOS() && !CGPreflightScreenCaptureAccess()) CGRequestScreenCaptureAccess(); }
+
+        internal static async Task<string> Microphone(bool request)
+        {
+            string helper = Path.Combine(AppContext.BaseDirectory, "capri-mic");
+            if (!OperatingSystem.IsMacOS() || !File.Exists(helper)) return "helper unavailable";
+            using Process process = new Process { StartInfo = new ProcessStartInfo(helper) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true } };
+            process.StartInfo.ArgumentList.Add(request ? "--request-permission" : "--permission-status");
+            process.Start();
+            try
+            {
+                Task<string> output = process.StandardOutput.ReadToEndAsync();
+                Task<string> errors = process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(request ? 125 : 5));
+                string status = (await output).Trim();
+                await errors;
+                return process.ExitCode == 0 && Array.IndexOf(new[] { "allowed", "denied", "restricted", "not requested", "unknown" }, status) >= 0 ? status : "could not check";
+            }
+            catch { try { if (!process.HasExited) process.Kill(true); } catch (Exception) { } throw; }
+        }
+
+        internal static async Task<string> DriverPermissions(DshOptions options, string home)
+        {
+            string helper = Path.Combine(AppContext.BaseDirectory, "dsh-permissions.mjs");
+            using Process process = new Process { StartInfo = DshBrain.StartInfo(options, helper, Path.Combine(home, "diagnostics")) };
+            process.Start();
+            try
+            {
+                Task<string> output = process.StandardOutput.ReadToEndAsync();
+                Task<string> errors = process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+                string text = await output;
+                string error = await errors;
+                if (process.ExitCode != 0) throw new InvalidOperationException("Driver permission check failed: " + Brain.Redacted(error.Length > 1600 ? error.Substring(0, 1600) : error));
+                using JsonDocument parsed = JsonDocument.Parse(text);
+                using DshTrace trace = new DshTrace(home, true);
+                var report = new { host = Status(), driver = parsed.RootElement.Clone() };
+                trace.Write("permissions.check", report);
+                return JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch (Exception error) { using DshTrace trace = new DshTrace(home, true); trace.Write("permissions.failure", new { error = error.Message }); try { if (!process.HasExited) process.Kill(true); } catch (Exception) { } throw; }
+        }
+
+        internal static void OpenPrivacy(string pane)
+        {
+            if (Array.IndexOf(new[] { "Accessibility", "ScreenCapture", "Microphone", "Automation", "FilesAndFolders" }, pane) < 0) throw new ArgumentException("Unknown privacy pane.");
+            ProcessStartInfo open = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+            open.ArgumentList.Add("x-apple.systempreferences:com.apple.preference.security?Privacy_" + pane);
+            Process.Start(open)?.Dispose();
         }
 
         internal static void Request()

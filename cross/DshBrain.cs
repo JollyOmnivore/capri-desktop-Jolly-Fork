@@ -17,6 +17,7 @@ namespace CapriDesktop
         public string Workspace { get; set; } = "";
         public int Port { get; set; } = 11434;
         public bool Computer { get; set; }
+        public bool Trace { get; set; }
 
         internal static DshOptions Read(string folder)
         {
@@ -84,20 +85,24 @@ namespace CapriDesktop
 
         private static async Task<string> Run(DshOptions options, string bridge, string home, string model, string persona, string text, List<ChatMessage> history, Func<string, string, string, CancellationToken, Task<bool>> approve, Action<string, string> activity, CancellationToken stop, DshTools tools, DshComputer computer)
         {
+            using DshTrace trace = new DshTrace(home, options.Trace);
+            trace.Write("turn.start", new { model, options.Computer, request = text, executable = Environment.ProcessPath, hostPermissions = OperatingSystem.IsMacOS() ? MacComputerAccess.Status() : "unavailable" });
             string runHome = Path.Combine(home, "runs", Guid.NewGuid().ToString("N"));
             using Process process = new Process { StartInfo = StartInfo(options, bridge, runHome) };
             stop.ThrowIfCancellationRequested();
             process.Start();
             Task errors = Drain(process.StandardError);
             string session = Guid.NewGuid().ToString("N"), reply = null, turnProblem = null, lastFailure = null;
-            if (computer != null && approve != null)
+            if (approve != null)
             {
                 var approval = approve;
                 approve = async (tool, arguments, cwd, token) =>
                 {
-                    await computer.Wait(token);
+                    if (computer != null) await computer.Wait(token);
+                    trace.Write("approval.request", new { tool, arguments });
                     bool allowed = await approval(tool, arguments, cwd, token);
-                    if (allowed) await computer.Wait(token);
+                    trace.Write("approval.result", new { tool, allowed });
+                    if (allowed && computer != null) await computer.Wait(token);
                     return allowed;
                 };
             }
@@ -131,7 +136,7 @@ namespace CapriDesktop
                                     if (args.TryGetProperty("callId", out JsonElement call) && call.ValueKind == JsonValueKind.String) outcomes[call.GetString()] = result;
                                 }
                                 catch (OperationCanceledException) { throw; }
-                                catch (Exception) { result = "Couldn't finish that Capri action. It was not retried."; }
+                                catch (Exception error) { trace.Write("tool.exception", new { error = error.Message }); result = "Couldn't finish that Capri action. It was not retried."; }
                                 stop.ThrowIfCancellationRequested();
                                 await Send(new { jsonrpc = "2.0", id = request.Clone(), result = new { text = result, isError = Hands.Failed(result) || Security.IsHold(result) } });
                                 continue;
@@ -157,16 +162,18 @@ namespace CapriDesktop
                             stop.ThrowIfCancellationRequested();
                             await Send(new { jsonrpc = "2.0", id = request.Clone(), result = new { allowed } });
                         }
+                        else if (incoming == "capri/diagnostic") trace.Write("driver.diagnostic", frame.GetProperty("params"));
                         else if (incoming == "session.event")
                         {
                             JsonElement data = frame.GetProperty("params");
                             if (data.GetProperty("sessionId").GetString() != session) continue;
                             JsonElement entry = data.GetProperty("event"), value = entry.GetProperty("data");
                             string kind = entry.GetProperty("type").GetString();
-                            if (kind == "assistant/message") reply = Text(value.GetProperty("message").GetProperty("content"));
-                            else if (kind == "turn/end") turnProblem = TurnProblem(value.GetProperty("reason"));
+                            if (kind == "assistant/message") { reply = Text(value.GetProperty("message").GetProperty("content")); if (!string.IsNullOrWhiteSpace(reply)) trace.Write("assistant.reply", new { text = reply }); }
+                            else if (kind == "turn/end") { turnProblem = TurnProblem(value.GetProperty("reason")); trace.Write("turn.end", value.GetProperty("reason")); }
                             else if (kind == "tool/call")
                             {
+                                trace.Write("tool.call", value);
                                 string tool = value.GetProperty("name").GetString();
                                 calls[value.GetProperty("callId").GetString()] = tool;
                                 activity?.Invoke(tool, null);
@@ -174,6 +181,7 @@ namespace CapriDesktop
                             else if (kind == "tool/result")
                             {
                                 JsonElement message = value.GetProperty("message");
+                                trace.Write("tool.result", message);
                                 string call = message.GetProperty("toolCallId").GetString();
                                 bool failed = message.TryGetProperty("isError", out JsonElement bad) && bad.GetBoolean();
                                 string detail = failed ? "Couldn't finish " + (calls.TryGetValue(call, out string called) ? called : "that action") + ": " + SafeProblem(Text(message.GetProperty("content"))) : "Finished.";
@@ -191,10 +199,10 @@ namespace CapriDesktop
             }
             try
             {
-                JsonElement hello = await Request("capri/initialize", new { cwd = options.Workspace, port = options.Port, model, persona, tools = tools?.Schemas ?? Array.Empty<JsonElement>(), toolMode = tools?.Mode ?? "all", computer = options.Computer && computer != null, hostPid = Environment.ProcessId });
+                JsonElement hello = await Request("capri/initialize", new { cwd = options.Workspace, port = options.Port, model, persona, tools = tools?.Schemas ?? Array.Empty<JsonElement>(), toolMode = tools?.Mode ?? "all", computer = options.Computer && computer != null, hostPid = Environment.ProcessId, readOnlyComputer = tools?.ComputerReadOnly ?? false });
                 if (hello.GetProperty("serverInfo").GetProperty("name").GetString() != "deepseek-harness-sdk-runtime") throw new InvalidDataException("Unexpected DSH runtime.");
                 StringBuilder prompt = new StringBuilder();
-                foreach (ChatMessage message in history.TakeLast(12))
+                foreach (ChatMessage message in (tools?.Mode == "computer" ? Enumerable.Empty<ChatMessage>() : history.TakeLast(12)))
                     if (message.Role == "user" || message.Role == "assistant") prompt.Append(message.Role).Append(": ").Append(message.Content).Append('\n');
                 string context = prompt.Length == 0 ? "" : "Previous conversation for context; do not repeat previous actions:\n" + prompt + "\nCurrent request:\n";
                 await Request("session/prompt", new { sessionId = session, contentBlocks = new[] { new { type = "text", text = context + text } } });
@@ -204,6 +212,7 @@ namespace CapriDesktop
                 if (string.IsNullOrWhiteSpace(reply)) throw new InvalidOperationException(lastFailure ?? "The local model ended without a visible reply. No action was retried.");
                 return reply;
             }
+            catch (Exception error) { trace.Write("turn.failure", new { error = error.Message, cancelled = error is OperationCanceledException }); throw; }
             finally
             {
                 try

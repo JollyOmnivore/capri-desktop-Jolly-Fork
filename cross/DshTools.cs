@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 
 namespace CapriDesktop
 {
@@ -17,6 +18,7 @@ namespace CapriDesktop
         private bool opened;
         private bool openAttempted;
         internal readonly string Request;
+        internal bool ComputerReadOnly { get; private set; }
         internal string Mode { get; private set; } = "all";
         internal JsonElement[] Schemas { get { return offered.Values.ToArray(); } }
 
@@ -26,7 +28,8 @@ namespace CapriDesktop
             this.action = action;
             this.current = current;
             string tool; ToolArguments arguments;
-            if (Hands.SearchOpening(request)) Mode = "search-open";
+            if (computer && ComputerRequested(request)) { Mode = "computer"; ComputerReadOnly = Regex.IsMatch(request, @"\bread[ -]?only\b|\b(?:don['’]t|do not)\s+click\s+or\s+type\b", RegexOptions.IgnoreCase); }
+            else if (Hands.SearchOpening(request)) Mode = "search-open";
             else if (Hands.Direct(request, out tool, out arguments) && tool == "web_search") Mode = "search";
             using JsonDocument catalog = JsonDocument.Parse(Hands.KitFor().Tools);
             foreach (JsonElement entry in catalog.RootElement.EnumerateArray())
@@ -34,6 +37,7 @@ namespace CapriDesktop
                 JsonElement definition = entry.GetProperty("function");
                 string name = definition.GetProperty("name").GetString();
                 if (computer && (name == "list_windows" || name == "shortcut" || name == "app_window")) continue;
+                if (Mode == "computer" && (ComputerReadOnly || name != "open_app")) continue;
                 if (Bridged.Contains(name)) offered.Add(name, definition.Clone());
             }
         }
@@ -51,7 +55,8 @@ namespace CapriDesktop
             args.Asked = Request;
             string unable = Hands.Unable(name, args);
             if (unable != null) return unable;
-            if (Mode != "all" && name != "web_search" && (Mode != "search-open" || name != "open_website")) return "Couldn't run that tool: this turn is limited to the requested web search.";
+            if (Mode == "computer" && name != "open_app") return "Couldn't run that tool: use the desktop computer tools for this turn.";
+            if (Mode != "all" && Mode != "computer" && name != "web_search" && (Mode != "search-open" || name != "open_website")) return "Couldn't run that tool: this turn is limited to the requested web search.";
             if (name == "open_website" && Mode != "all" && (Mode != "search-open" || openAttempted || results.Count == 0)) return "Couldn't open a page: this search did not authorize another browser action.";
             if (name == "open_website" && results.Count > 0)
             {
@@ -72,6 +77,8 @@ namespace CapriDesktop
             if (name == "open_website") { openAttempted = true; opened = !Hands.Failed(result) && !Security.IsHold(result); }
             return result;
         }
+
+        internal static bool ComputerRequested(string text) { return Regex.IsMatch(text ?? "", @"^\s*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?use\s+(?:the\s+)?computer[ -]+(?:tools?|use)\b|^\s*computer[ -]+use\s*:", RegexOptions.IgnoreCase); }
 
         internal void VerifyCompletion()
         {

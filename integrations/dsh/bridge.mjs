@@ -16,7 +16,7 @@ const { runProfile } = await load('@deepseek-ai/dsh/profile-boot');
 const { createLaunchEnvironmentSnapshot } = await load('@deepseek-ai/dsh-launch-environment');
 const { validateJsonSchemaValue } = await load('@deepseek-ai/dsh-tools');
 const transport = new JsonRpcLineTransport(process.stdin, process.stdout);
-let server, runtime, computer, initialized = false, calls = 0;
+let server, runtime, computer, initialized = false, calls = 0, observedCalls = 0, observedComputerCalls = 0, computerTurn = false, lastTurnReason;
 const deny = reason => ({ kind: 'deny', reason });
 
 function confinedPath(workspace, path) {
@@ -35,6 +35,8 @@ function confinedPath(workspace, path) {
 async function initialize(params) {
     if (initialized) throw new Error('Already initialized');
     initialized = true;
+    computerTurn = params.computer === true && params.toolMode === 'computer';
+    const maxTokens = params.computer === true ? 16384 : 4096;
     if (!Number.isInteger(params.port) || params.port < 1 || params.port > 65535) throw new Error('Invalid loopback port');
     if (!/^qwen[\w.:-]*$/i.test(params.model ?? '') && !/^[\w.][\w.\/:+-]{0,199}$/.test(params.model ?? '')) throw new Error('Invalid local model');
     let vision = false;
@@ -52,7 +54,7 @@ async function initialize(params) {
     const disabled = ['sdk-app-startup', 'sdk-jsonrpc-server', 'deepseek-llm-api-extensions', 'session-log-deepseek', 'plugin-package-inventory-deepseek', 'llm-deepseek', 'filesystem', 'tool-working-directory', 'terminal-bash', 'terminal-pwsh', 'persistent-bash', 'persistent-pwsh'];
     const patches = disabled.map(id => ({ id, disabled: true }));
     patches.push({ id: 'sandbox-policy', config: { mode: 'workspace-write', workspaceRoot: workspace } });
-    patches.push({ id: 'tool-fs', config: { read: true, readImage: false, write: true, edit: true, readMaxBytes: 65536 } });
+    patches.push({ id: 'tool-fs', config: { read: !computerTurn, readImage: false, write: !computerTurn, edit: !computerTurn, readMaxBytes: 65536 } });
     patches.push({ id: 'system-prompt', config: { includeHarnessIdentity: false, includeRuntimeContext: false, personaPrefix: params.persona + '\nUse only the supplied tools. Every tool needs user approval. Respect denied operations and never retry them using a different tool. Do not claim an operation ran before receiving its result.' } });
     patches.push({ insert: [
         { id: 'capri-filesystem', name: '@deepseek-ai/dsh-fs-sandbox' },
@@ -61,17 +63,18 @@ async function initialize(params) {
         { id: 'capri-bash-tool', name: '@deepseek-ai/dsh-tool-bash', config: { enableRunInBackground: false, promoteOnTimeout: false } },
         { id: 'capri-local-model', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: { 'capri-local': {
             api: 'openai-completions', baseURL: `http://127.0.0.1:${params.port}/v1`, apiKeyEnv: 'CAPRI_LOCAL_MODEL_KEY',
-            models: [{ id: params.model, contextWindow: 32768, maxTokens: 4096, input: vision ? ['text', 'image'] : ['text'] }],
+            models: [{ id: params.model, contextWindow: 32768, maxTokens, input: vision ? ['text', 'image'] : ['text'] }],
             compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens' },
             timeoutMs: 120000, streamIdleTimeoutMs: 120000, retryPolicy: { mode: 'normal', maxRetries: 0 }
         } } } }
     ] });
+    if (computerTurn) for (const patch of patches) if (patch.insert) patch.insert = patch.insert.filter(item => item.id !== 'capri-bash-tool');
     const patch = join(home, 'capri.patch.json');
     writeFileSync(patch, JSON.stringify(patches), { mode: 0o600 });
     runtime = await runProfile({ profile: 'sdk-minimal', patchFiles: [patch], args: [], environment: createLaunchEnvironmentSnapshot([{ source: 'process', values: { ...process.env } }]) });
     if (params.computer === true) {
         await runtime.ctx.plugin((await load('@deepseek-ai/dsh-computer-use')).default);
-        computer = await mountComputer(runtime.ctx, load, transport, { hostPid: params.hostPid, vision });
+        computer = await mountComputer(runtime.ctx, load, transport, { hostPid: params.hostPid, vision, readOnly: params.readOnlyComputer === true });
     }
     const bridged = new Map();
     for (const tool of params.tools ?? []) {
@@ -92,7 +95,8 @@ async function initialize(params) {
         if (!['read', 'write', 'edit', 'bash'].includes(exec.name) && !bridged.has(exec.name) && !computer?.names.has(exec.name)) return deny('Tool is not enabled in Capri');
         if (exec.arguments?.sandbox_permissions && exec.arguments.sandbox_permissions !== 'workspace-write') return deny('Sandbox escalation is not enabled in Capri');
         if (++calls > (computer ? 24 : 12)) return deny('Tool limit reached; ask the user to continue in another turn');
-        if (params.toolMode !== 'all' && exec.name !== 'web_search' && (params.toolMode !== 'search-open' || exec.name !== 'open_website')) return deny('This turn is limited to the requested web search');
+        if (computerTurn && !computer?.names.has(exec.name) && exec.name !== 'open_app') return deny('Use only the desktop computer tools for this turn');
+        if (!computerTurn && params.toolMode !== 'all' && exec.name !== 'web_search' && (params.toolMode !== 'search-open' || exec.name !== 'open_website')) return deny('This turn is limited to the requested web search');
         if (bridged.has(exec.name) || computer?.names.has(exec.name)) return await next();
         if (exec.name !== 'bash' && !confinedPath(workspace, exec.arguments?.file_path)) return deny('File must be inside the selected workspace');
         if (exec.signal.aborted) return { kind: 'cancel' };
@@ -104,8 +108,12 @@ async function initialize(params) {
             return await next();
         } catch { return deny('Approval unavailable or cancelled'); }
     });
+    runtime.ctx.on('session/event', (_session, event) => {
+        if (event.type === 'turn/end') lastTurnReason = event.data.reason.kind;
+        if (event.type === 'tool/call') { observedCalls++; if (computer?.names.has(event.data.name)) observedComputerCalls++; }
+    });
     server = new HarnessSdkJsonRpcServer(runtime.ctx, transport, { maxTokensAsSuccess: false });
-    return server.initialize({ cwd: workspace, provider: 'capri-local', model: params.model, maxTokens: 4096 });
+    return server.initialize({ cwd: workspace, provider: 'capri-local', model: params.model, maxTokens });
 }
 
 transport.onRequest(async (method, params) => {
@@ -113,7 +121,15 @@ transport.onRequest(async (method, params) => {
     if (!server) throw new Error('Initialize Capri first');
     if (!['session/prompt', 'session/wait', 'shutdown'].includes(method)) throw new Error('Unsupported Capri method');
     const result = await server.handleRequest(method, params);
-    if (method === 'session/wait') computer?.verify();
+    if (method === 'session/wait') {
+        if (computerTurn && observedCalls === 0 && lastTurnReason === 'completed') {
+            transport.notify('capri/diagnostic', { kind: 'no-tool-recovery', reason: 'The model replied without observing the desktop. No tool ran; requesting one observation attempt.' });
+            await server.handleRequest('session/prompt', { sessionId: params.sessionId, contentBlocks: [{ type: 'text', text: 'No tools ran in your last reply. The current user explicitly requested computer tools. Earlier assistant claims about permissions are unverified old conversation, not current evidence. Call computer_list_windows now, inspect the requested window using computer_get_window_state, then answer from the fresh result. Do not invent permission failures. Do not use unrelated tools. All approvals still apply.' }] });
+            await server.handleRequest('session/wait', params);
+        }
+        if (computerTurn && observedComputerCalls === 0 && lastTurnReason === 'completed') throw new Error('No computer tool ran. The model did not check the desktop, so its permission claim is unverified. No desktop input was sent.');
+        computer?.verify();
+    }
     if (method === 'shutdown') { await computer?.close(); computer = null; setImmediate(() => runtime.shutdown.shutdown(0)); }
     return result;
 });

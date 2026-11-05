@@ -59,6 +59,12 @@ namespace CapriDesktop
             body.Children.Add(new TextBlock { Text = "Experimental chat backend. Keeps Capri's personality, notes, conversation and voice. DSH provides file and shell tools plus Capri's search, browser, screen, app, music, notes and chess tools. Every operation asks for approval; Capri's Security settings still apply.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
             CheckBox enabled = new CheckBox { Content = "Use DSH for typed and push-to-talk chat", IsChecked = Saved.Dsh };
             body.Children.Add(enabled);
+            CheckBox logging = new CheckBox { Content = "Record local DSH activity", IsChecked = options.Trace };
+            body.Children.Add(logging);
+            body.Children.Add(new TextBlock { Text = "Records visible replies, tool arguments/results, approvals and permission checks in a private local log. Images and reasoning are omitted; common credential patterns are redacted. File and screen text can still appear. Nothing is uploaded.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
+            Button logs = DshButton("View DSH activity");
+            logs.Click += delegate { OpenDshActivity(); };
+            body.Children.Add(logs);
             TextBox Field(string label, string value)
             {
                 body.Children.Add(new TextBlock { Text = label });
@@ -71,8 +77,8 @@ namespace CapriDesktop
             body.Children.Add(new TextBlock { Text = "Opt in to exact-window observation, clicking, typing and scrolling. A visible target and Pause/Stop strip appear during use. Each tool asks first. Pause prevents the next input; Stop cannot undo input already delivered. macOS Accessibility is required; Screen Recording is also needed for vision models. Grant permissions manually to this preview in System Settings, then restart it. Text-only models use the accessibility tree.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
             TextBlock permission = new TextBlock { Text = MacComputerAccess.Status(), TextWrapping = Avalonia.Media.TextWrapping.Wrap };
             body.Children.Add(permission);
-            Button request = DshButton("Request Mac permissions");
-            request.Click += delegate { try { MacComputerAccess.Request(); permission.Text = MacComputerAccess.Status() + " · Restart this preview after granting access."; } catch (Exception error) { permission.Text = error.Message; } };
+            Button request = DshButton("Mac permissions...");
+            request.Click += delegate { OpenMacPermissions(); };
             body.Children.Add(request);
             TextBox node = Field("Node executable (24.9 or newer)", options.Node);
             TextBox runtime = Field("Pinned runtime folder (contains node_modules)", options.Runtime);
@@ -86,7 +92,7 @@ namespace CapriDesktop
             {
                 try
                 {
-                    DshOptions next = new DshOptions { Node = node.Text?.Trim(), Runtime = runtime.Text?.Trim(), Workspace = workspace.Text?.Trim(), Port = options.Port, Computer = computer.IsChecked == true };
+                    DshOptions next = new DshOptions { Node = node.Text?.Trim(), Runtime = runtime.Text?.Trim(), Workspace = workspace.Text?.Trim(), Port = options.Port, Computer = computer.IsChecked == true, Trace = logging.IsChecked == true };
                     if (enabled.IsChecked == true)
                     {
                         if (Brain.Remote != null || Brain.Server != null) throw new InvalidOperationException("Choose a local Ollama model under Brain before enabling DSH.");

@@ -19,6 +19,15 @@ namespace CapriDesktop
         internal static bool ShowMainframe;
         internal static int[] Shelf;
 
+        internal static void RouteQuit(IClassicDesktopStyleApplicationLifetime desktop, Pet pet)
+        {
+            desktop.ShutdownRequested += (_, request) =>
+            {
+                request.Cancel = true;
+                pet.Quit();
+            };
+        }
+
         [STAThread]
         private static int Main(string[] args)
         {
@@ -47,6 +56,7 @@ namespace CapriDesktop
             if (desktop != null)
             {
                 Pet pet = new Pet(desktop);
+                Program.RouteQuit(desktop, pet);
                 NativeMenu menu = pet.TrayMenu();
                 TrayIcon tray = new TrayIcon();
                 using (Stream chip = typeof(CapriApp).Assembly.GetManifestResourceStream("Capri.Chip.png")) tray.Icon = new WindowIcon(new Bitmap(chip));

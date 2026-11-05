@@ -68,6 +68,26 @@ func wave(_ samples: Data) -> Data {
 
 if CommandLine.arguments.count == 2 {
     switch CommandLine.arguments[1] {
+    case "--permission-status", "--request-permission":
+        if CommandLine.arguments[1] == "--request-permission" && AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            let permissionLock = NSLock()
+            var answered = false
+            AVCaptureDevice.requestAccess(for: .audio) { _ in permissionLock.lock(); answered = true; permissionLock.unlock() }
+            let deadline = Date().addingTimeInterval(120)
+            while Date() < deadline {
+                permissionLock.lock(); let done = answered; permissionLock.unlock()
+                if done { break }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+        }
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: print("allowed")
+        case .denied: print("denied")
+        case .restricted: print("restricted")
+        case .notDetermined: print("not requested")
+        @unknown default: print("unknown")
+        }
+        exit(0)
     case "--check":
         guard Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil else { fail("Missing microphone permission description.") }
         print("capri-mic ready"); exit(0)
