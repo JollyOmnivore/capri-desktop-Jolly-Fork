@@ -100,13 +100,13 @@ try {
     try { await request('session/wait', { sessionId: 'fixture' }); } catch (error) { if (!neverTools) throw error; failure = error.message; }
     if (neverTools) { assert(failure?.includes('No computer tool ran')); assert.equal(requests.length, 2); assert.equal(approvals, 0); console.log('PASS ungrounded replies get one correction then a clear no-action error without input or approvals'); }
     if (neverTools) { await request('shutdown'); child.stdin.end(); }
-    else if (localModel) { assert(requests.every(r => r.max_tokens === 8192), 'Computer turns did not receive the larger output budget'); assert(approvals >= (readOnly ? 2 : 4), 'Local model did not complete the observation/input/verification loop'); assert(completedTools.some(m => JSON.stringify(m.content).includes(readOnly ? 'Display' : 'Hello from Capri')), 'Typed value never returned through verification'); assert(lastReply.includes(readOnly ? '0' : 'Hello from Capri'), 'Final reply did not confirm the typed value'); await request('shutdown'); child.stdin.end(); console.log(readOnly ? 'PASS local Qwen ignores stale permission claims and reads the synthetic Calculator display using observation-only tools' : 'PASS local model completes a synthetic desktop workflow'); }
+    else if (localModel) { assert(requests.every(r => r.max_tokens === 16384), 'Computer turns did not receive the larger output budget'); assert(approvals >= (readOnly ? 2 : 4), 'Local model did not complete the observation/input/verification loop'); assert(completedTools.some(m => JSON.stringify(m.content).includes(readOnly ? 'Display' : 'Hello from Capri')), 'Typed value never returned through verification'); assert(lastReply.includes(readOnly ? '0' : 'Hello from Capri'), 'Final reply did not confirm the typed value'); await request('shutdown'); child.stdin.end(); console.log(readOnly ? 'PASS local Qwen ignores stale permission claims and reads the synthetic Calculator display using observation-only tools' : 'PASS local model completes a synthetic desktop workflow'); }
     else {
     assert.equal(approvals, fixture ? 4 : 1);
     assert.equal(requests.length, fixture ? noTools ? 6 : 5 : 2);
     if (noTools) { assert(requests[1].messages.some(m => JSON.stringify(m).includes("No tools ran in your last reply"))); assert(!requests[0].tools.some(t => ["bash","read","write","edit"].includes(t.function.name))); console.log("PASS stale no-tool permission excuse triggers one real observation attempt with unrelated tools excluded"); }
     assert.equal(visuals, fixture ? 8 : 0);
-    assert(requests.every(r => r.max_tokens === 8192), 'Computer turns did not receive the larger output budget');
+    assert(requests.every(r => r.max_tokens === 16384), 'Computer turns did not receive the larger output budget');
     const names = requests[0].tools.map(t => t.function.name);
     assert.equal(names.filter(n => n.startsWith('computer_')).length, 7);
     assert(!names.includes('clipboard_read'));

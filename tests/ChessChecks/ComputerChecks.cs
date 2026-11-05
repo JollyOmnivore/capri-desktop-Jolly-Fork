@@ -16,6 +16,10 @@ internal sealed class ComputerTestApp : Application
     [DllImport("/usr/lib/libobjc.A.dylib")] private static extern IntPtr sel_registerName(string name);
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern IntPtr Obj(IntPtr instance, IntPtr selector);
     [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] [return: MarshalAs(UnmanagedType.I1)] private static extern bool Bool(IntPtr instance, IntPtr selector);
+    [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public double X, Y, Width, Height; }
+    [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern NativeRect Frame(IntPtr instance, IntPtr selector);
+    [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] private static extern uint CGMainDisplayID();
+    [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] private static extern NativeRect CGDisplayBounds(uint display);
     private int count;
     private void Check(bool yes, string label) { if (!yes) throw new Exception(label); count++; Console.WriteLine("PASS " + label); }
     public override void Initialize() { Styles.Add(new FluentTheme()); }
@@ -70,6 +74,18 @@ internal sealed class ComputerTestApp : Application
                 using JsonDocument failed = JsonDocument.Parse("{\"phase\":\"failed\",\"tool\":\"computer_click\"}");
                 await computer.Update(failed.RootElement, cancel.Token);
                 Check(cursor.IsVisible, "failed operation retains the last attempted cursor until turn cleanup");
+                foreach (var screen in target.Screens.All)
+                {
+                    int x = screen.Bounds.X + 120, y = screen.Bounds.Y + 120;
+                    using JsonDocument location = JsonDocument.Parse(JsonSerializer.Serialize(new { phase = "before", tool = "computer_click", target = new { x, y, width = 80, height = 40, app = "Disposable monitor fixture" } }));
+                    await computer.Update(location.RootElement, cancel.Token);
+                    var handle = cursor.TryGetPlatformHandle();
+                    IntPtr native = handle.HandleDescriptor == "NSWindow" ? handle.Handle : Obj(handle.Handle, sel_registerName("window"));
+                    NativeRect actual = Frame(native, sel_registerName("frame"));
+                    double tipX = actual.X + 90, tipY = CGDisplayBounds(CGMainDisplayID()).Height - actual.Y - actual.Height + 90;
+                    Console.WriteLine("MONITOR bounds=" + screen.Bounds + " scale=" + screen.Scaling + " expected=" + (x + 40) + "," + (y + 20) + " nativeTip=" + tipX + "," + tipY);
+                    Check(Math.Abs(tipX - (x + 40)) <= 2 && Math.Abs(tipY - (y + 20)) <= 2, "native cursor tip aligns on display " + screen.Bounds);
+                }
                 computer.TogglePause();
                 Task stopped = computer.Wait(cancel.Token);
                 cancel.Cancel();
