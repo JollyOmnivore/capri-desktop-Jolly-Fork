@@ -5,7 +5,7 @@ const descriptions = {
     list_apps: 'List running and installed Mac apps. Use Capri open_app to launch one if needed.',
     list_windows: 'Discover exact window_id and pid pairs. Choose a visible window on the current desktop; do not infer ordering from array position.',
     get_window_state: 'Observe one exact pid/window_id. Returns fresh accessibility elements and, for a vision model, a screenshot. Use element_token from this snapshot. A new snapshot invalidates old tokens. Observe before each input and again afterward to verify the outcome.',
-    click: 'Click a visible element_token from the latest window snapshot, or x/y screenshot pixels. Supply its exact pid and window_id. Background delivery only. Observe fresh state afterward to verify; a delivered click alone does not prove success.',
+    click: 'Match the requested control by its label in the current snapshot before selecting its element_token or index; never choose an index by position alone. Supply exact pid/window_id. Background delivery only. Call computer_get_window_state after EVERY input before any further input. A delivered click alone does not prove success.',
     type_text: 'Insert text into a visible element_token or x/y field from a fresh snapshot. Supply exact pid/window_id. Background delivery only. Observe afterward and verify the field value.',
     press_key: 'Send a key, optionally with modifiers, to an exact observed pid/window_id. Use a fresh element_token to target a field. Background delivery only. Observe afterward to verify.',
     scroll: 'Scroll an exact observed pid/window_id, using an element_token or x/y from a fresh snapshot when needed. Background delivery only. Observe afterward to verify.'
@@ -17,7 +17,10 @@ export class ComputerPolicy {
         if (!computerNames.has(name)) throw new Error('Computer tool is not enabled');
         const args = { ...original };
         for (const key of forbidden) if (key in args) throw new Error(`Unsupported computer argument: ${key}`);
-        if (name === 'list_apps' || name === 'list_windows') return { args, visual: null };
+        if (name === 'list_apps' || name === 'list_windows') {
+            if (name === 'list_windows') args.on_screen_only = true;
+            return { args, visual: null };
+        }
         if (!Number.isSafeInteger(args.pid) || !Number.isSafeInteger(args.window_id) || args.pid < 1 || args.window_id < 1 || args.pid === this.pid || args.pid === process.pid) throw new Error('Select one exact external app window');
         const key = `${args.pid}:${args.window_id}`;
         const window = this.windows.get(key);
@@ -31,7 +34,7 @@ export class ComputerPolicy {
             return { args, visual: null, summary: { app: window.app_name, window: window.title, bounds: window.bounds } };
         }
         const state = this.states.get(key);
-        if (!state || state.used || Date.now() - state.at > 120000) throw new Error('Get a fresh window state before each input and verify the previous action first');
+        if (!state || state.used || Date.now() - state.at > 120000) throw new Error('No input was sent. Call computer_get_window_state with pid=' + args.pid + ' and window_id=' + args.window_id + ' now. Inspect the result, match the requested control by label, then use its NEW element_token/index and snapshot_id. Do not repeat this stale click.');
         if (args.delivery_mode && args.delivery_mode !== 'background') throw new Error('Foreground input is not enabled; ask the user to perform that step');
         args.delivery_mode = 'background';
         const bounds = state.data.window_bounds;
@@ -57,7 +60,7 @@ export class ComputerPolicy {
         if (result.isError || !data || data.refusal || data.code) return;
         if (name === 'list_windows' && Array.isArray(data.windows)) {
             this.windows.clear(); this.states.clear();
-            data.windows = data.windows.filter(w => w.pid !== this.pid && w.pid !== process.pid && !/^Capri(?: |$)/i.test(w.app_name ?? ''));
+            data.windows = data.windows.filter(w => w.is_on_screen === true && w.on_current_space !== false && w.pid !== this.pid && w.pid !== process.pid && !/^Capri(?: |$)/i.test(w.app_name ?? ''));
             for (const w of data.windows) this.windows.set(`${w.pid}:${w.window_id}`, w);
         }
         if (name === 'list_apps' && Array.isArray(data.apps)) data.apps = data.apps.filter(a => a.pid !== this.pid && a.pid !== process.pid && !/^Capri(?: |$)/i.test(a.name ?? ''));

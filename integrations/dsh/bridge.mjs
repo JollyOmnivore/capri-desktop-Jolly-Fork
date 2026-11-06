@@ -37,6 +37,7 @@ async function initialize(params) {
     initialized = true;
     computerTurn = params.computer === true && params.toolMode === 'computer';
     const maxTokens = params.computer === true ? 16384 : 4096;
+    const directQwen = params.computer === true && /^qwen/i.test(params.model ?? '');
     if (!Number.isInteger(params.port) || params.port < 1 || params.port > 65535) throw new Error('Invalid loopback port');
     if (!/^qwen[\w.:-]*$/i.test(params.model ?? '') && !/^[\w.][\w.\/:+-]{0,199}$/.test(params.model ?? '')) throw new Error('Invalid local model');
     let vision = false;
@@ -63,8 +64,9 @@ async function initialize(params) {
         { id: 'capri-bash-tool', name: '@deepseek-ai/dsh-tool-bash', config: { enableRunInBackground: false, promoteOnTimeout: false } },
         { id: 'capri-local-model', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: { 'capri-local': {
             api: 'openai-completions', baseURL: `http://127.0.0.1:${params.port}/v1`, apiKeyEnv: 'CAPRI_LOCAL_MODEL_KEY',
-            models: [{ id: params.model, contextWindow: 32768, maxTokens, input: vision ? ['text', 'image'] : ['text'] }],
-            compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens' },
+            models: [{ id: params.model, contextWindow: 32768, maxTokens, input: vision ? ['text', 'image'] : ['text'], ...(directQwen ? { reasoningEfforts: { off: null, low: 'low' } } : {}) }],
+            ...(directQwen ? { reasoning: 'off' } : {}),
+            compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens', ...(directQwen ? { thinkingFormat: 'chat-template', chatTemplateKwargs: { enable_thinking: false } } : {}) },
             timeoutMs: 120000, streamIdleTimeoutMs: 120000, retryPolicy: { mode: 'normal', maxRetries: 0 }
         } } } }
     ] });
@@ -72,6 +74,7 @@ async function initialize(params) {
     const patch = join(home, 'capri.patch.json');
     writeFileSync(patch, JSON.stringify(patches), { mode: 0o600 });
     runtime = await runProfile({ profile: 'sdk-minimal', patchFiles: [patch], args: [], environment: createLaunchEnvironmentSnapshot([{ source: 'process', values: { ...process.env } }]) });
+    if (params.computer === true) transport.notify('capri/diagnostic', { kind: 'computer-model-settings', mode: params.toolMode, maxTokens, thinkingDisabled: directQwen });
     if (params.computer === true) {
         await runtime.ctx.plugin((await load('@deepseek-ai/dsh-computer-use')).default);
         computer = await mountComputer(runtime.ctx, load, transport, { hostPid: params.hostPid, vision, readOnly: params.readOnlyComputer === true });

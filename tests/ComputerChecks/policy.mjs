@@ -12,6 +12,7 @@ function listed() { policy.accept('list_windows', {}, result({ windows: [window]
 function snapshot() { policy.accept('get_window_state', args, result(data)); }
 const click = { ...args, element_token: 'fresh' };
 check('only seven bounded window tools exposed', () => assert.equal(computerNames.size, 7));
+check('window discovery requests only on-screen windows', () => assert.equal(policy.prepare('list_windows', {}).args.on_screen_only, true));
 check('unknown tools refused', () => assert.throws(() => policy.prepare('clipboard_read', {})));
 check('input before discovery refused', () => assert.throws(() => policy.prepare('click', click)));
 listed();
@@ -42,6 +43,7 @@ const tree = new ComputerPolicy(99, false); tree.accept('list_windows', {}, resu
 check('text model cannot click guessed pixels', () => assert.throws(() => tree.prepare('click', { ...args, x: 1, y: 1 })));
 check('text model explicitly disables screenshot capture', () => assert.equal(tree.prepare('get_window_state', args).args.include_screenshot, false));
 check('host windows scrubbed from both result forms', () => { const r = result({ windows: [window, { ...window, pid: 99 }] }); policy.accept('list_windows', {}, r); assert.equal(r.structuredContent.windows.length, 1); assert.equal(JSON.parse(r.content[0].text).windows.length, 1); });
+check('hidden and other-space windows do not enter the model context', () => { const r = result({ windows: [window, { ...window, is_on_screen: false }, { ...window, on_current_space: false }] }); policy.accept('list_windows', {}, r); assert.equal(r.structuredContent.windows.length, 1); });
 check('failed snapshot never authorizes input', () => { listed(); policy.accept('get_window_state', args, { ...result(data), isError: true }); assert.throws(() => policy.prepare('click', click)); });
 check('discovery refresh invalidates previous snapshot', () => { snapshot(); listed(); assert.throws(() => policy.prepare('click', click)); });
 
