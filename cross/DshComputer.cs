@@ -22,6 +22,7 @@ namespace CapriDesktop
         private PixelPoint? lastPoint;
         private TextBlock status, detail;
         private Button pause;
+        private StackPanel queueRows;
         private string phase = "Preparing desktop tools";
         internal bool Paused { get { lock (gate) return resumed != null; } }
 
@@ -101,6 +102,32 @@ namespace CapriDesktop
             await Wait(token);
         }
 
+        internal async Task UpdateQueue(JsonElement message, CancellationToken token)
+        {
+            await Wait(token);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                token.ThrowIfCancellationRequested();
+                if (ended) throw new OperationCanceledException();
+                if (strip == null) Build();
+                string state = message.GetProperty("phase").GetString();
+                phase = state == "planning" ? "Planning task queue" : state == "done" ? "Task queue complete" : state == "blocked" ? "Task queue blocked" : "Running task queue";
+                status.Text = Paused ? "Paused · no new input" : phase;
+                strip.Height = 380;
+                queueRows.Children.Clear();
+                int count = 0;
+                foreach (JsonElement step in message.GetProperty("steps").EnumerateArray())
+                {
+                    if (++count > 6) throw new InvalidOperationException("Too many queued steps.");
+                    string label = step.GetProperty("status").GetString();
+                    queueRows.Children.Add(new TextBlock { Text = count + ". [" + label + "] " + step.GetProperty("title").GetString(), Foreground = label == "blocked" ? MainframeTheme.Rose : label == "done" ? MainframeTheme.Cyan : MainframeTheme.White, TextWrapping = TextWrapping.Wrap, FontSize = 15 });
+                    if (step.TryGetProperty("result", out JsonElement result)) queueRows.Children.Add(new TextBlock { Text = result.GetString(), TextWrapping = TextWrapping.Wrap, FontSize = 12 });
+                }
+                if (message.TryGetProperty("problem", out JsonElement problem)) queueRows.Children.Add(new TextBlock { Text = problem.GetString(), TextWrapping = TextWrapping.Wrap, FontSize = 14 });
+            });
+            await Wait(token);
+        }
+
         private void Build()
         {
             strip = new Window { Title = "Capri · Computer use", Width = 610, Height = 126, CanResize = false, Topmost = true, ShowActivated = false, Background = MainframeTheme.Ground, Foreground = MainframeTheme.White, FontFamily = MainframeTheme.Text, WindowStartupLocation = WindowStartupLocation.CenterScreen };
@@ -114,6 +141,8 @@ namespace CapriDesktop
             pause.Click += delegate { TogglePause(); };
             cancel.Click += delegate { stop(); Dispose(); };
             buttons.Children.Add(pause); buttons.Children.Add(cancel); body.Children.Add(buttons);
+            queueRows = new StackPanel { Spacing = 5 };
+            body.Children.Add(new ScrollViewer { Content = queueRows, MaxHeight = 230 });
             strip.Content = body;
             strip.Closed += delegate { if (!ended) { stop(); Dispose(); } };
             strip.Show();

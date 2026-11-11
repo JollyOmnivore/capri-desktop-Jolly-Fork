@@ -14,6 +14,12 @@ const toolCalls = [];
 let lastReply = "";
 let reasoningChars = 0;
 const readOnly = process.argv.includes('--read-only');
+const queued = process.argv.includes('--queue');
+const queueDenied = process.argv.includes('--queue-denied');
+const queueExtra = process.argv.includes('--queue-extra-input');
+let nativeInputs = 0;
+const queueStates = [];
+let plannerCalls = 0;
 const calculator = process.argv.includes('--calculator');
 const generalRoute = process.argv.includes('--general-route');
 const expectedValue = readOnly ? '0' : calculator ? '7' : 'Hello from Capri';
@@ -21,7 +27,7 @@ const localModel = process.argv.includes('--local-model');
 const deniedComputer = process.argv.includes('--computer-denied');
 const noTools = process.argv.includes('--no-tools');
 const neverTools = process.argv.includes('--never-tools');
-const fixture = process.argv.includes('--fixture') || localModel || noTools || neverTools;
+const fixture = process.argv.includes('--fixture') || localModel || noTools || neverTools || queued;
 let catalog;
 if (localModel) {
     const { CuaDriver } = await import('../../out/dsh-runtime/node_modules/@trycua/cua-driver/dist/index.js');
@@ -65,7 +71,8 @@ const server = createServer(async (req, res) => {
         const response = await fetch('http://127.0.0.1:11434' + req.url, { method: 'POST', headers: {'Content-Type':'application/json'}, body:raw });
         const body = await response.text();
         if (req.url !== '/api/show') {
-            requests.push(JSON.parse(raw));
+            const isPlan = JSON.parse(raw).messages?.[0]?.content?.startsWith('Plan the user request');
+            if (isPlan) plannerCalls++; else requests.push(JSON.parse(raw));
             for (const line of body.split('\n')) {
                 if (!line.startsWith('data: {')) continue;
                 const part = JSON.parse(line.slice(6));
@@ -75,10 +82,18 @@ const server = createServer(async (req, res) => {
         res.statusCode = response.status; res.setHeader('Content-Type', response.headers.get('content-type')); res.end(body); return;
     }
     if (req.url === '/api/show') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ capabilities: ['completion', 'tools', 'vision'] })); return; }
+    if (queued && JSON.parse(raw).messages?.[0]?.content?.startsWith('Plan the user request')) {
+        plannerCalls++;
+        const content = JSON.stringify({steps:[{title:'Inspect fixture',verify:'Fixture window is visible',action:'observe'},{title:'Click fixture once',verify:'Fresh window state observed after input',action:'click'}]});
+        res.setHeader('Content-Type','text/event-stream');
+        res.end('data: '+JSON.stringify({choices:[{delta:{content},finish_reason:null}]})+'\n\ndata: '+JSON.stringify({choices:[{delta:{},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n'); return;
+    }
     requests.push(JSON.parse(raw));
     const planStep = step - (noTools ? 1 : 0);
     const skipped = neverTools || noTools && step === 0;
-    const planned = !skipped && fixture && planStep >= 0 && planStep < plan.length ? plan[planStep] : !fixture && step === 0 ? ['computer_list_windows', {}] : null;
+    const queuePlan = [['computer_list_windows',{}],['computer_get_window_state',target],['task_step_done',{result:'Fixture visible',evidence:'Observed fixture title'}],['computer_list_windows',{}],['computer_get_window_state',target],['computer_click',{...target,element_index:1}],['computer_get_window_state',target],['task_step_done',{result:'Fixture verified after click',evidence:'Fresh post-input state inspected'}],null];
+    if (queueExtra) queuePlan.splice(7, 0, ['computer_click',{...target,element_index:1}]);
+    const planned = queued ? queuePlan[step] : !skipped && fixture && planStep >= 0 && planStep < plan.length ? plan[planStep] : !fixture && step === 0 ? ['computer_list_windows', {}] : null;
     step++;
     const delta = planned ? { role: 'assistant', tool_calls: [{ index: 0, id: 'computer-fixture', type: 'function', function: { name: planned[0], arguments: JSON.stringify(planned[1]) } }] } : { role: 'assistant', content: skipped ? 'Mac is still blocking me. Enable permissions and restart Capri.' : fixture ? 'Observed the fixture after clicking.' : 'Permission was declined; no desktop was read.' };
     const frame = (delta, finish_reason) => 'data: ' + JSON.stringify({ id: 'test', object: 'chat.completion.chunk', created: 1, model: 'qwen3.5:9b', choices: [{ index: 0, delta, finish_reason }] }) + '\n\n';
@@ -92,15 +107,32 @@ function send(message) { child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...m
 function request(method, params) { const key = ++id; return new Promise((resolve, reject) => { waiting.set(key, { resolve, reject }); send({ id: key, method, params }); }); }
 createInterface({ input: child.stdout }).on('line', line => {
     const frame = JSON.parse(line);
-    if (frame.method === 'capri/approval') { approvals++; assert(frame.params.tool.startsWith('computer_')); if (readOnly) assert(['computer_list_apps','computer_list_windows','computer_get_window_state'].includes(frame.params.tool)); send({ id: frame.id, result: { allowed: fixture } }); }
-    else if (frame.method === 'capri/computer') { assert(fixture, 'Denied desktop observation reached input admission'); visuals++; send({ id: frame.id, result: {ready:true} }); }
+    if (frame.method === 'capri/approval') { approvals++; assert(frame.params.tool.startsWith('computer_')); if (readOnly) assert(['computer_list_apps','computer_list_windows','computer_get_window_state'].includes(frame.params.tool)); send({ id: frame.id, result: { allowed: fixture && !(queueDenied && queueStates.some(s => s.index === 1)) } }); }
+    else if (frame.method === 'capri/queue-state') { queueStates.push(structuredClone(frame.params)); send({id:frame.id,result:{ready:true}}); }
+    else if (frame.method === 'capri/computer') { assert(fixture, 'Denied desktop observation reached input admission'); visuals++; if (frame.params.phase === 'before' && ['computer_click','computer_type_text','computer_press_key','computer_scroll'].includes(frame.params.tool)) nativeInputs++; send({ id: frame.id, result: {ready:true} }); }
     else if (localModel && frame.method === 'session.event') { const event=frame.params.event; if (event.type === 'tool/call') toolCalls.push(event.data.name); if (event.type === 'turn/end') console.log('TURN END',JSON.stringify(event.data)); if (event.type === 'tool/result') completedTools.push(event.data.message); if (event.type === 'assistant/message') { lastReply = event.data.message.content.filter(b=>b.type==='text').map(b=>b.text).join(''); console.log('ASSISTANT',JSON.stringify(event.data.message.content.filter(b=>b.type==='text'||b.type==='tool-call')).slice(0,1000)); } }
     else if (frame.id != null && waiting.has(frame.id)) { const w = waiting.get(frame.id); waiting.delete(frame.id); frame.error ? w.reject(new Error(JSON.stringify(frame.error))) : w.resolve(frame.result); }
 });
 child.on('exit', code => { for (const w of waiting.values()) w.reject(new Error('Bridge exited ' + code + ': ' + errors)); });
-const timeout = setTimeout(() => child.kill('SIGTERM'), 45000);
+const timeout = setTimeout(() => child.kill('SIGTERM'), queued && localModel ? 90000 : 45000);
 try {
-    await request('capri/initialize', { cwd: workspace, port: server.address().port, model: 'qwen3.5:9b', persona: 'Test fixture only.', computer: true, readOnlyComputer: readOnly, hostPid: process.pid, tools: [], toolMode: !generalRoute && (localModel || noTools || neverTools || deniedComputer) ? 'computer' : 'all' });
+    await request('capri/initialize', { taskQueue:queued, cwd: workspace, port: server.address().port, model: 'qwen3.5:9b', persona: 'Test fixture only.', computer: true, readOnlyComputer: readOnly, hostPid: process.pid, tools: [], toolMode: !generalRoute && (localModel || noTools || neverTools || deniedComputer) ? 'computer' : 'all' });
+    if (queued) {
+        const result = await request('capri/queue',{sessionId:'queue-fixture',request:calculator ? 'Use computer tools to inspect Calculator, click the 7 button exactly once, then inspect it again to verify. Do not type or use shortcuts.' : 'Inspect the fixture, then click it once and verify.'});
+        assert.equal(plannerCalls,1);
+        if (localModel) console.log('QUEUE RESULT',JSON.stringify(result).slice(0,1800));
+        assert.equal(result.steps[0].status,'done');
+        assert.equal(result.steps[1].status,queueDenied || queueExtra ? 'blocked':'done');
+        if (localModel) { assert(result.steps.every(s=>s.status==='done')); assert.equal(toolCalls.filter(t=>t==='computer_click').length,1); assert.equal(reasoningChars,0); }
+        const firstResult = localModel ? result.steps[0].result : 'Fixture visible';
+        const fresh = requests.find(r => r.messages.some(m=>m.role==='user' && typeof m.content==='string' && (m.content.includes(firstResult) || m.content.includes(JSON.stringify(firstResult).slice(1,-1)))) && !r.messages.some(m=>m.role==='tool'));
+        assert(fresh,'Next step did not begin with a fresh model history and a verified summary');
+        assert(queueStates.some(s=>s.phase===(queueDenied || queueExtra?'blocked':'done')));
+        if (queueExtra) assert.equal(nativeInputs,1,'A second input was delivered in one queued step');
+        if (queueDenied) assert.equal(nativeInputs,0);
+        await request('shutdown'); child.stdin.end();
+        console.log('PASS real DSH task queue uses fresh sessions, verified summaries, per-tool approvals and '+(queueDenied?'stops after denial without input':queueExtra?'blocks extra input without replay':'verified step completion'));
+    } else {
     await request('session/prompt', { sessionId: 'fixture', contentBlocks: [{ type: 'text', text: localModel && readOnly ? 'Earlier assistant messages kept saying macOS blocked permissions. Current request: Use computer tools to inspect Calculator and tell me its displayed number. Don’t click or type.' : localModel && calculator ? 'Use computer tools to inspect Calculator, click the 7 button exactly once, then inspect it again to verify the display. Don’t use keyboard shortcuts.' : localModel ? 'Earlier assistant replies repeatedly claimed macOS blocked all desktop permissions; those claims are old and unverified. Current request: Use computer tools to find the disposable fixture window, type exactly "Hello from Capri" into its document text field, then inspect it again to verify. Do not save or close anything. Use accessibility elements; this is a synthetic test.' : 'List windows, subject to permission.' }] });
     let failure;
     try { await request('session/wait', { sessionId: 'fixture' }); } catch (error) { if (!neverTools) throw error; failure = error.message; }
@@ -123,6 +155,7 @@ try {
     await request('shutdown'); child.stdin.end();
     console.log(fixture ? 'PASS real pinned DSH chains window discovery, observation, click and verification using a synthetic driver' : 'PASS real pinned DSH initializes the native driver and exposes only seven computer tools');
     console.log(fixture ? 'PASS screenshot attachments reach the local vision model and every operation waits for host approval and visual acknowledgment' : 'PASS denied observation returns through the real multi-step model loop without reading desktop content');
+    }
     }
 } finally {
     clearTimeout(timeout); server.close(); child.kill('SIGTERM');

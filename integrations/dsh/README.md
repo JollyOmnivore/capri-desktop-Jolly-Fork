@@ -30,6 +30,24 @@ The pinned npm runtime is installed in ignored `out/dsh-runtime`. Its lockfile r
 
 ## Computer use with visible controls
 
+### Task queue
+
+**Mainframe > DSH setup > Break desktop requests into a visible task queue** is enabled by default when computer use is enabled. It applies to explicit computer requests and action requests such as opening an app and navigating to a view. Explanatory questions and the existing search/search-to-open routes keep their normal workflow. Turning the queue off restores the single-session computer loop.
+
+The local model first produces a bounded plan without tools or desktop actions. Up to six steps appear in the existing computer controls, with waiting, running, done and blocked states. Each step starts a fresh DSH session with the original request, only brief verified summaries of completed steps, and the current step's success check. Earlier screenshots, tool transcripts and element references are not copied into the new session. This reduces accumulated input context; it does not guarantee that an individual model call cannot reach its limit.
+
+Each step has one enforced action type: observe, open an app, click, type, key or scroll. Only the matching computer input tool is exposed, and at most one input is admitted. Fresh observation is required before computer input and after it before completion. The model must submit a bounded result and evidence; this is model interpretation of fresh state, not a guarantee that its interpretation is correct. All existing operation approvals and Security checks remain. Denial, tool errors, unverified completion and output limits block the queue without replaying actions. Pause holds the transition acknowledgment before the next step; Stop cancels the complete request. Completed steps are reported in the final reply and `queue.state` activity records. This first version does not persist or automatically resume queues after restarting the app. Steps allow up to eight tool calls, the entire queue up to 48, and the existing five-minute request timeout still applies.
+
+Queue checks use synthetic windows and local mock servers:
+
+```sh
+node tests/ComputerChecks/queue.mjs
+node tests/ComputerChecks/runtime.mjs --queue
+node tests/ComputerChecks/runtime.mjs --queue --queue-denied
+node tests/ComputerChecks/runtime.mjs --queue --queue-extra-input
+node tests/ComputerChecks/runtime.mjs --queue --local-model --calculator
+```
+
 In **Mainframe > DSH setup**, select **Enable computer use · Mac mouse and keyboard**, then save. This is independently off by default. Open **Mac permissions...** for current Accessibility, Screen Recording and microphone status, individual requests, and **Request required permissions**. That flow requests these three grants without recording audio or capturing the screen. Automation and Files & Folders have separate System Settings buttons; Automation grants are per target app, so macOS has no single request-all prompt. Allow the preview app in System Settings and restart it after granting access. Setup displays current permission status; missing grants produce an explicit tool error without sending input. Capri no longer runs automatic `tccutil reset` commands. Rebuilding an ad-hoc signed preview may still require regranting access. Set `CAPRI_CODESIGN_IDENTITY` to an existing stable code-signing identity when packaging to preserve a consistent signer. Alternatively, save the identity fingerprint (or exact certificate name) in `out/codesign-identity`; that local file is ignored by Git and reused automatically. An explicitly configured or saved identity must resolve to exactly one valid identity before publishing begins. If it is missing, expired or ambiguous, packaging stops without an ad-hoc fallback. With no identity configured, the initial default remains ad-hoc. The script never creates certificates or changes Keychain trust.
 
 The pinned Cua Driver SDK (`@trycua/cua-driver` 0.28.0) runs in the DSH child process. Capri registers seven bounded tools through DSH's MCP result adapter: app discovery, window discovery, window state, click, type, key and scroll. It does not expose the driver's clipboard, browser-profile, permission-changing, recording, arbitrary file or configuration tools. Existing `open_app` uses Capri's verified Mac launcher. Computer tool descriptions are kept concise and omit unsupported foreground fallback instructions. Computer mode hides the older `list_windows`, `shortcut` and `app_window` routes so the model uses the computer provider instead of mixing in legacy Mac Automation controls. This is a Capri provider around the native SDK, not a mount of its entire catalog.

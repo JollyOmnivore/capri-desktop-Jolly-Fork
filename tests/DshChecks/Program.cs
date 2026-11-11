@@ -123,6 +123,9 @@ try
     var desktopNames = desktop.Schemas.Select(d => d.GetProperty("name").GetString()).ToArray();
     Check(!desktopNames.Contains("list_windows") && !desktopNames.Contains("shortcut") && !desktopNames.Contains("app_window") && desktopNames.Contains("open_app"), "computer mode removes overlapping legacy Automation controls while retaining the native app launcher");
     Check(!DshTools.ComputerRequested("How does computer use work?") && DshTools.ComputerRequested("Could you use computer tools to inspect Calculator?"), "informational questions do not trigger mandatory desktop observation");
+    Check(DshTools.QueueRequested("Could you do me a favor and open Teams then go to Chat?") && DshTools.QueueRequested("Use computer tools to inspect Calculator"), "desktop queue accepts natural and explicit computer requests");
+    Check(!DshTools.QueueRequested("How do I open Teams?") && !DshTools.QueueRequested("Explain how to click a button"), "desktop explanations do not start a task queue");
+    Check(new DshOptions().TaskQueue, "task queue is enabled by default for eligible desktop requests");
     DshTools readOnlyDesktop = new DshTools("Use computer tools to inspect Calculator. Don’t click or type.", (tool, values) => "unused", computer: true);
     Check(readOnlyDesktop.Mode == "computer" && readOnlyDesktop.ComputerReadOnly && readOnlyDesktop.Schemas.Length == 0, "explicit read-only computer requests cannot use native action or file tools");
     DshTools clickDesktop = new DshTools("Use computer tools to click 7. Don’t type or use shortcuts.", (tool, values) => "unused", computer: true);

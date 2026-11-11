@@ -86,6 +86,13 @@ internal sealed class ComputerTestApp : Application
                     Console.WriteLine("MONITOR bounds=" + screen.Bounds + " scale=" + screen.Scaling + " expected=" + (x + 40) + "," + (y + 20) + " nativeTip=" + tipX + "," + tipY);
                     Check(Math.Abs(tipX - (x + 40)) <= 2 && Math.Abs(tipY - (y + 20)) <= 2, "native cursor tip aligns on display " + screen.Bounds);
                 }
+                using JsonDocument queued = JsonDocument.Parse("{\"phase\":\"running\",\"steps\":[{\"title\":\"Inspect fixture\",\"status\":\"done\",\"result\":\"Window verified\"},{\"title\":\"Click fixture\",\"status\":\"running\"}]}");
+                await computer.UpdateQueue(queued.RootElement, cancel.Token);
+                Check(strip.Height == 380 && strip.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "1. [done] Inspect fixture") && strip.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "2. [running] Click fixture"), "queue displays completed and current steps in the existing computer controls");
+                computer.TogglePause();
+                Task queueWaiting = computer.UpdateQueue(queued.RootElement, cancel.Token);
+                Check(!queueWaiting.IsCompleted, "pause holds the queue transition acknowledgment before the next step");
+                computer.TogglePause(); await queueWaiting;
                 computer.TogglePause();
                 Task stopped = computer.Wait(cancel.Token);
                 cancel.Cancel();

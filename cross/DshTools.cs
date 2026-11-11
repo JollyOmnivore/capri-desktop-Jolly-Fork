@@ -80,6 +80,13 @@ namespace CapriDesktop
 
         internal static bool ComputerRequested(string text) { return Regex.IsMatch(text ?? "", @"^\s*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?use\s+(?:the\s+)?computer[ -]+(?:tools?|use)\b|^\s*computer[ -]+use\s*:", RegexOptions.IgnoreCase); }
 
+        internal static bool QueueRequested(string text)
+        {
+            if (ComputerRequested(text)) return true;
+            if (Regex.IsMatch(text ?? "", @"^\s*(?:how|what|why|where|when|does|is|are)\b|\b(?:explain|tell me about)\b", RegexOptions.IgnoreCase)) return false;
+            return Regex.IsMatch(text ?? "", @"\b(?:open|launch|click|navigate|scroll|switch to|go to)\b", RegexOptions.IgnoreCase);
+        }
+
         internal void VerifyCompletion()
         {
             if (Mode == "search-open" && !opened) throw new InvalidOperationException("Search finished, but opening a page was not confirmed. No browser action was retried.");

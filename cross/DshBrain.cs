@@ -18,6 +18,7 @@ namespace CapriDesktop
         public int Port { get; set; } = 11434;
         public bool Computer { get; set; }
         public bool Trace { get; set; }
+        public bool TaskQueue { get; set; } = true;
 
         internal static DshOptions Read(string folder)
         {
@@ -93,6 +94,7 @@ namespace CapriDesktop
             process.Start();
             Task errors = Drain(process.StandardError);
             string session = Guid.NewGuid().ToString("N"), reply = null, turnProblem = null, lastFailure = null;
+            bool queued = options.TaskQueue && options.Computer && computer != null && tools?.Mode != "search" && tools?.Mode != "search-open" && DshTools.QueueRequested(text);
             if (approve != null)
             {
                 var approval = approve;
@@ -148,6 +150,14 @@ namespace CapriDesktop
                                 await Send(new { jsonrpc = "2.0", id = request.Clone(), result = new { ready = true } });
                                 continue;
                             }
+                            if (incoming == "capri/queue-state")
+                            {
+                                if (!queued || computer == null) throw new InvalidOperationException("Task queue is disabled.");
+                                trace.Write("queue.state", frame.GetProperty("params"));
+                                await computer.UpdateQueue(frame.GetProperty("params"), stop);
+                                await Send(new { jsonrpc = "2.0", id = request.Clone(), result = new { ready = true } });
+                                continue;
+                            }
                             bool allowed = false;
                             if (incoming == "capri/approval" && approve != null)
                             {
@@ -166,7 +176,8 @@ namespace CapriDesktop
                         else if (incoming == "session.event")
                         {
                             JsonElement data = frame.GetProperty("params");
-                            if (data.GetProperty("sessionId").GetString() != session) continue;
+                            string sourceSession = data.GetProperty("sessionId").GetString();
+                            if (sourceSession != session && !(queued && sourceSession.StartsWith(session + "-step-", StringComparison.Ordinal))) continue;
                             JsonElement entry = data.GetProperty("event"), value = entry.GetProperty("data");
                             string kind = entry.GetProperty("type").GetString();
                             if (kind == "assistant/message") { reply = Text(value.GetProperty("message").GetProperty("content")); if (!string.IsNullOrWhiteSpace(reply)) trace.Write("assistant.reply", new { text = reply }); }
@@ -199,8 +210,15 @@ namespace CapriDesktop
             }
             try
             {
-                JsonElement hello = await Request("capri/initialize", new { cwd = options.Workspace, port = options.Port, model, persona, tools = tools?.Schemas ?? Array.Empty<JsonElement>(), toolMode = tools?.Mode ?? "all", computer = options.Computer && computer != null, hostPid = Environment.ProcessId, readOnlyComputer = tools?.ComputerReadOnly ?? false });
+                JsonElement hello = await Request("capri/initialize", new { cwd = options.Workspace, port = options.Port, model, persona, tools = tools?.Schemas ?? Array.Empty<JsonElement>(), toolMode = tools?.Mode ?? "all", computer = options.Computer && computer != null, hostPid = Environment.ProcessId, readOnlyComputer = tools?.ComputerReadOnly ?? false, taskQueue = queued });
                 if (hello.GetProperty("serverInfo").GetProperty("name").GetString() != "deepseek-harness-sdk-runtime") throw new InvalidDataException("Unexpected DSH runtime.");
+                if (queued)
+                {
+                    JsonElement result = await Request("capri/queue", new { sessionId = session, request = text });
+                    reply = result.GetProperty("reply").GetString();
+                    trace.Write("queue.reply", new { text = reply });
+                    return reply;
+                }
                 StringBuilder prompt = new StringBuilder();
                 foreach (ChatMessage message in (tools?.Mode == "computer" ? Enumerable.Empty<ChatMessage>() : history.TakeLast(12)))
                     if (message.Role == "user" || message.Role == "assistant") prompt.Append(message.Role).Append(": ").Append(message.Content).Append('\n');

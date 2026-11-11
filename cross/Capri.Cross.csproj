@@ -14,6 +14,7 @@
     <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
   </PropertyGroup>
   <ItemGroup>
+    <Content Include="../integrations/dsh/queue.mjs" Link="queue.mjs" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Avalonia" Version="11.3.22" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.22" />

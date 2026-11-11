@@ -74,6 +74,9 @@ namespace CapriDesktop
             }
             CheckBox computer = new CheckBox { Content = "Enable computer use · Mac mouse and keyboard", IsChecked = options.Computer };
             body.Children.Add(computer);
+            CheckBox queue = new CheckBox { Content = "Break desktop requests into a visible task queue", IsChecked = options.TaskQueue };
+            body.Children.Add(queue);
+            body.Children.Add(new TextBlock { Text = "Plans up to six small steps. Each gets a fresh model session and a short summary of verified progress. Every action still asks; failures stop the queue without replaying completed actions.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
             body.Children.Add(new TextBlock { Text = "Opt in to exact-window observation, clicking, typing and scrolling. A visible target and Pause/Stop strip appear during use. Each tool asks first. Pause prevents the next input; Stop cannot undo input already delivered. macOS Accessibility is required; Screen Recording is also needed for vision models. Grant permissions manually to this preview in System Settings, then restart it. Text-only models use the accessibility tree.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
             TextBlock permission = new TextBlock { Text = MacComputerAccess.Status(), TextWrapping = Avalonia.Media.TextWrapping.Wrap };
             body.Children.Add(permission);
@@ -92,7 +95,7 @@ namespace CapriDesktop
             {
                 try
                 {
-                    DshOptions next = new DshOptions { Node = node.Text?.Trim(), Runtime = runtime.Text?.Trim(), Workspace = workspace.Text?.Trim(), Port = options.Port, Computer = computer.IsChecked == true, Trace = logging.IsChecked == true };
+                    DshOptions next = new DshOptions { Node = node.Text?.Trim(), Runtime = runtime.Text?.Trim(), Workspace = workspace.Text?.Trim(), Port = options.Port, Computer = computer.IsChecked == true, Trace = logging.IsChecked == true, TaskQueue = queue.IsChecked == true };
                     if (enabled.IsChecked == true)
                     {
                         if (Brain.Remote != null || Brain.Server != null) throw new InvalidOperationException("Choose a local Ollama model under Brain before enabling DSH.");
