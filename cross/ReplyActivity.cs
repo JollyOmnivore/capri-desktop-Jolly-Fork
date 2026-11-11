@@ -15,7 +15,7 @@ namespace CapriDesktop
             if (result == null)
             {
                 Tools++; Active = true;
-                Label = tool == "web_search" ? "Searching the web" : tool == "open_website" ? "Opening a page" : tool == "look_at_screen" ? "Looking at your screen" : tool == "open_app" ? "Opening an app" : tool == "mini_game" ? "Updating the game" : tool == "capri_settings" ? "Updating settings" : "Running an action";
+                Label = tool.StartsWith("computer_", StringComparison.Ordinal) ? "Using the computer" : tool == "bash" ? "Running a command" : tool == "read" ? "Reading a file" : tool == "write" || tool == "edit" ? "Updating a file" : tool == "web_search" ? "Searching the web" : tool == "open_website" ? "Opening a page" : tool == "look_at_screen" ? "Looking at your screen" : tool == "open_app" ? "Opening an app" : tool == "mini_game" ? "Updating the game" : tool == "capri_settings" ? "Updating settings" : "Running an action";
             }
             else
             {
@@ -26,6 +26,8 @@ namespace CapriDesktop
             }
         }
         internal void Voice() { voicePending = true; Label = "Preparing voice"; Active = true; }
+        internal void AwaitApproval() { Label = "Waiting for permission"; Active = true; }
+        internal void ResumeTool() { Label = "Running an action"; Active = true; }
         internal void VoiceReady() { voicePending = false; }
         internal void Replying() { Label = outcome ?? (voicePending ? "Replying · preparing voice" : "Replying"); Active = outcome == null; }
         internal void Complete() { Label = outcome ?? (voicePending ? "Preparing voice" : Tools > 0 ? "Action finished" : "Reply complete"); Active = outcome == null && voicePending; }

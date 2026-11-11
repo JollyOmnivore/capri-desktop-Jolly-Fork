@@ -162,7 +162,7 @@ namespace CapriDesktop
             cloudRequests++;
             frameProblem = null;
             KeepBrainTier();
-            Brain.Cancel();
+            CancelBrain();
             Saved.BrainTier = tier;
             cloudModels = null;
             cloudListing = false;

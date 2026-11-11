@@ -88,6 +88,8 @@ namespace CapriDesktop
 
         internal static void Attach(Brain brain)
         {
+            Hands.LaunchApp = OnMac ? MacLauncher.Launch : null;
+            Hands.AppAlias = OnMac ? MacLauncher.Alias : null;
             Hands.SearchWeb = WebSearch.Search;
             Hands.Run = delegate(string id) { Open(id, OnMac); };
             Hands.Press = delegate(byte key) { Key(key, OnMac); };
@@ -574,11 +576,12 @@ namespace CapriDesktop
         internal static string[] MacFolders()
         {
             string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            return new[] { "/Applications", "/Applications/Utilities", "/System/Applications", "/System/Applications/Utilities", Path.Combine(home, "Applications") };
+            return new[] { "/Applications", "/System/Applications", "/System/Library/CoreServices/Applications", "/System/Library/CoreServices/Finder.app", Path.Combine(home, "Applications") };
         }
 
         internal static List<InstalledApp> MacApps(IEnumerable<string> folders)
         {
+            if (OnMac) return MacLauncher.Catalog(folders);
             List<InstalledApp> apps = new List<InstalledApp>();
             foreach (string folder in folders)
             {

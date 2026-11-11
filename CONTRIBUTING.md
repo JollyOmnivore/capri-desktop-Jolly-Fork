@@ -108,6 +108,16 @@ The mock web-search suite verifies activity callbacks on actual search and brows
 
 ## House rules
 
+The optional Mac DSH backend, pinned runtime setup, permission boundaries and runtime/UI checks are documented in [integrations/dsh/README.md](integrations/dsh/README.md).
+
+Mac app discovery and verified launching have dedicated smoke checks:
+
+```sh
+dotnet run --project tests/MacAppsChecks/MacAppsChecks.csproj -c Release
+```
+
+These use fixture app bundles and intercepted launches. Add `-- --live` to compile and open a small self-closing test app through real Launch Services; personal apps are not launched. Checks cover recursive bundle discovery, display names, aliases, duplicate installations, cache refresh, exact paths, verified startup, uncertain results and the existing Security gate. The native `capri-apps` helper ships alongside `capri-mic` in Mac builds.
+
 - **Match the code around you.** No code comments, plain names, and the same layout as the file you're in.
 - **`app/` is C# 5.** It's built with the `csc.exe` that ships with Windows, so no `$"..."` strings, `?.`, `nameof` or `=>` members.
 - **Add a smoke check** for anything new she does. Look for `checks.Add("PASS ...")` in `app/Capri.cs` or `cross/Smoke.cs`.

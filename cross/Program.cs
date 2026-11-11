@@ -16,11 +16,22 @@ namespace CapriDesktop
     {
         internal static string Smoke;
         internal static bool CheckChess;
+        internal static bool ShowMainframe;
         internal static int[] Shelf;
+
+        internal static void RouteQuit(IClassicDesktopStyleApplicationLifetime desktop, Pet pet)
+        {
+            desktop.ShutdownRequested += (_, request) =>
+            {
+                request.Cancel = true;
+                pet.Quit();
+            };
+        }
 
         [STAThread]
         private static int Main(string[] args)
         {
+            ShowMainframe = Array.IndexOf(args, "--mainframe") >= 0 || File.Exists(Path.Combine(AppContext.BaseDirectory, "capri-preview"));
             if (args.Length >= 5 && args[0] == "--shelf")
             {
                 Shelf = new[] { int.Parse(args[1]), int.Parse(args[2]), int.Parse(args[3]), int.Parse(args[4]) };
@@ -45,6 +56,7 @@ namespace CapriDesktop
             if (desktop != null)
             {
                 Pet pet = new Pet(desktop);
+                Program.RouteQuit(desktop, pet);
                 NativeMenu menu = pet.TrayMenu();
                 TrayIcon tray = new TrayIcon();
                 using (Stream chip = typeof(CapriApp).Assembly.GetManifestResourceStream("Capri.Chip.png")) tray.Icon = new WindowIcon(new Bitmap(chip));
@@ -55,6 +67,7 @@ namespace CapriDesktop
                 icons.Add(tray);
                 TrayIcon.SetIcons(this, icons);
                 pet.Show();
+                if (Program.ShowMainframe && Program.Smoke == null) pet.OpenMainframe();
             }
             base.OnFrameworkInitializationCompleted();
         }

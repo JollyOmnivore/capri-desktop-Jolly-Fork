@@ -38,6 +38,7 @@ namespace CapriDesktop
         [DataMember] internal bool PocketVoice;
         [DataMember] internal string PocketSpeaker;
         [DataMember] internal string MicrophoneInput;
+        [DataMember] internal bool Dsh;
         [DataMember] internal int Typing;
         [DataMember] internal bool NoDiscord;
         [DataMember] internal string CloudModel;
@@ -750,8 +751,9 @@ namespace CapriDesktop
 
         internal void Bring()
         {
+            if (quitting) return;
             Screen screen = Screens.Primary ?? ScreenHere();
-            if (screen == null || quitting) return;
+            if (screen == null) return;
             Halt();
             SetAway(false);
             if (!IsVisible) { Show(); Look.OnTopAgain(this); }
@@ -1445,7 +1447,7 @@ namespace CapriDesktop
             if (Brain.Model == null) { Talk.Answer("(microphone)", "Connect a brain first, then hold TALK to speak."); return; }
             ComeBack();
             int ticket = ++asking;
-            Brain.Cancel();
+            CancelBrain();
             StopSpeech();
             Talk.Dismiss();
             LocalDictation session = new LocalDictation(folder) { InputDevice = Saved.MicrophoneInput };
@@ -1858,6 +1860,9 @@ namespace CapriDesktop
             menu.Items.Add(playChess);
             MenuItem extra = new MenuItem { Header = "More options" };
             extra.Items.Add(brainMenu);
+            MenuItem backend = new MenuItem { Header = "Experimental DSH backend...", IsEnabled = OperatingSystem.IsMacOS() };
+            backend.Click += delegate { OpenDsh(); };
+            extra.Items.Add(backend);
             if (OperatingSystem.IsMacOS())
             {
                 MenuItem microphone = new MenuItem { Header = "Microphone input..." };
@@ -2911,7 +2916,7 @@ namespace CapriDesktop
 
         private void ForgetServerKey()
         {
-            Brain.Cancel();
+            CancelBrain();
             ++asking;
             string server;
             string ignored;
@@ -2959,7 +2964,7 @@ namespace CapriDesktop
                         Talk.Answer("(brain provider)", "Couldn't save the provider address and key.");
                         return;
                     }
-                    Brain.Cancel();
+                    CancelBrain();
                     Brain.SetServer(server, key);
                     Saved.BrainServer = server;
                     WriteSecret(ServerKeyFile, null, "provider key");
@@ -2976,7 +2981,7 @@ namespace CapriDesktop
         internal void PickServerModel(string model)
         {
             if (string.IsNullOrEmpty(model) || model == Brain.Model) return;
-            Brain.Cancel();
+            CancelBrain();
             Brain.Model = model;
             Saved.ServerModel = model;
             Save();
@@ -2990,7 +2995,7 @@ namespace CapriDesktop
                 Talk.Answer("(brain server)", "Couldn't remove the saved provider.");
                 return;
             }
-            Brain.Cancel();
+            CancelBrain();
             Brain.SetServer(null, null);
             Saved.BrainServer = null;
             frameModels = Array.Empty<string>();
@@ -3161,7 +3166,7 @@ namespace CapriDesktop
         internal void PickBrain(string model)
         {
             if (string.IsNullOrEmpty(model) || model == Brain.Model) return;
-            Brain.Cancel();
+            CancelBrain();
             // Her chat carries on with the new model, so changing brains never wipes what she was doing.
             Brain.Model = model;
             Saved.Model = model;
@@ -3897,7 +3902,7 @@ namespace CapriDesktop
             Typed();
             if (meeting.Asking) { Met(text); return; }
             int ticket = ++asking;
-            Brain.Cancel();
+            CancelBrain();
             StopSpeech();
             string tool;
             Talk.Activity.Begin();
@@ -3949,6 +3954,8 @@ namespace CapriDesktop
             Func<string, string> think = Think;
             bool follows = FollowUps;
             int input = inputTurn;
+            int revision = Brain.Revision;
+            bool useDsh = Saved.Dsh;
             Cloud remote = Brain.Remote;
             ThreadPool.QueueUserWorkItem(delegate
             {
@@ -3956,14 +3963,20 @@ namespace CapriDesktop
                 string after = null;
                 bool stuck = false;
                 bool failed = false;
-                try { said = think == null ? Brain.Ask(text, follows, out after) : think(text); }
+                try { said = think != null ? think(text) : useDsh ? AskDsh(text, revision) : Brain.Ask(text, follows, out after); }
                 catch (BrainException error) { failed = true; said = error.Message == Brain.Offline ? Offline : error.Told ? error.Message : "My brain couldn't answer: " + error.Message; stuck = Brain.Stalled(error); }
-                catch (Exception error) { failed = true; said = Brain.Explain(error, remote) ?? "That reply was cancelled. Try again."; stuck = Brain.Stalled(error); }
+                catch (Exception error)
+                {
+                    failed = true;
+                    said = useDsh ? error is OperationCanceledException ? "That DSH turn stopped. Check any completed actions before retrying." : "DSH couldn't finish: " + Brain.Redacted(error.Message) : Brain.Explain(error, remote) ?? "That reply was cancelled. Try again.";
+                    if (useDsh && !(error is OperationCanceledException)) Brain.Log("DSH", -1, error.Message);
+                    stuck = Brain.Stalled(error);
+                }
                 if (string.IsNullOrWhiteSpace(said)) { failed = true; said = "My brain sent an empty reply. Try again."; }
                 Dispatcher.UIThread.Post(delegate
                 {
                     if (ticket != asking) return;
-                    if (stuck && switches < 2 && Hop(remote)) { Ask(ticket, text, switches + 1); return; }
+                    if (!useDsh && stuck && switches < 2 && Hop(remote)) { Ask(ticket, text, switches + 1); return; }
                     if (failed) Talk.Activity.Fail();
                     if (!failed && Talk.Activity.Tools == 0 && (Hands.WaitingPromise(said) || said == Hands.Unpromised)) { Talk.Activity.NoAction(); said = Hands.Unpromised; }
                     if (input != inputTurn) after = null;
@@ -3989,7 +4002,7 @@ namespace CapriDesktop
             stalled.Add(old);
             string next = Brain.Next(old, cloudModels, stalled);
             if (next == null) return false;
-            Brain.Cancel();
+            CancelBrain();
             remote.Model = next;
             Brain.Model = next;
             Brain.Log("NVIDIA", -1, old + " wasn't answering, so she switched to " + next + ".");
@@ -4276,7 +4289,7 @@ namespace CapriDesktop
             cloudRequests++;
             frameProblem = null;
             KeepBrainTier();
-            Brain.Cancel();
+            CancelBrain();
             Brain.Remote = new Cloud(key, model);
             Brain.Model = model;
             Saved.CloudModel = model;
@@ -4291,7 +4304,7 @@ namespace CapriDesktop
         {
             Cloud remote = Brain.Remote;
             if (remote == null || string.IsNullOrEmpty(model)) return;
-            Brain.Cancel();
+            CancelBrain();
             remote.Model = model;
             Brain.Model = model;
             Saved.CloudModel = model;
@@ -4305,7 +4318,7 @@ namespace CapriDesktop
             brainRequests++;
             cloudRequests++;
             cloudListing = false;
-            Brain.Cancel();
+            CancelBrain();
             Brain.Remote = null;
             Brain.Model = null;
             cloudModels = null;
@@ -4652,6 +4665,7 @@ namespace CapriDesktop
         internal sealed class NewSettings
         {
             [DataMember] internal string MicrophoneInput;
+            [DataMember] internal bool Dsh;
             [DataMember] internal string VoiceProvider;
             [DataMember] internal string LocalVoiceUrl;
             [DataMember] internal string LocalVoiceModel;
@@ -4680,6 +4694,7 @@ namespace CapriDesktop
         internal static Settings Kept(Settings saved, NewSettings newer)
         {
             if (saved == null || newer == null || saved.VoiceProvider != null) return saved;
+            saved.Dsh = newer.Dsh;
             saved.VoiceProvider = newer.VoiceProvider;
             saved.LocalVoiceUrl = newer.LocalVoiceUrl;
             saved.LocalVoiceModel = newer.LocalVoiceModel;
@@ -4708,7 +4723,7 @@ namespace CapriDesktop
 
         internal static NewSettings Newest(Settings saved)
         {
-            return new NewSettings { MicrophoneInput = saved.MicrophoneInput, VoiceProvider = saved.VoiceProvider, LocalVoiceUrl = saved.LocalVoiceUrl, LocalVoiceModel = saved.LocalVoiceModel, LocalVoiceName = saved.LocalVoiceName, LocalVoiceFormat = saved.LocalVoiceFormat, BrainServer = saved.BrainServer, ServerModel = saved.ServerModel,
+            return new NewSettings { Dsh = saved.Dsh, MicrophoneInput = saved.MicrophoneInput, VoiceProvider = saved.VoiceProvider, LocalVoiceUrl = saved.LocalVoiceUrl, LocalVoiceModel = saved.LocalVoiceModel, LocalVoiceName = saved.LocalVoiceName, LocalVoiceFormat = saved.LocalVoiceFormat, BrainServer = saved.BrainServer, ServerModel = saved.ServerModel,
                 MainframeSize = saved.MainframeSize, AdvancedSettings = saved.AdvancedSettings, MemorySize = saved.MemorySize, ReplyLength = saved.ReplyLength, BrainTier = saved.BrainTier, FreeModel = saved.FreeModel, PaidModel = saved.PaidModel, SpeechModel = saved.SpeechModel,
                 CareSwitches = saved.CareSwitches, CareTimes = saved.CareTimes, CareNight = saved.CareNight, NoHeadPats = saved.NoHeadPats, NoFollowUps = saved.NoFollowUps, NoKeepAwake = saved.NoKeepAwake, Vault = saved.Vault };
         }
@@ -4752,7 +4767,7 @@ namespace CapriDesktop
             CancelPushToTalk();
             StopAwake();
             CloseMainframe();
-            Brain.Cancel();
+            CancelBrain();
             StopSpeech();
             if (presence != null) presence.Dispose();
             Talk.Dismiss();
@@ -4766,6 +4781,7 @@ namespace CapriDesktop
 
         internal void Finish(int code)
         {
+            dsh.Cancel();
             if (chess != null) chess.Close();
             CancelPushToTalk();
             StopAwake();

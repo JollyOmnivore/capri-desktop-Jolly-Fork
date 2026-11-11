@@ -19,6 +19,14 @@ internal static class Entry
     {
         Folder = Path.GetFullPath(args.Length == 0 ? "out/chess-checks" : args[0]);
         Directory.CreateDirectory(Folder);
+        if (args.Contains("--bring")) { CapriDesktop.Program.Smoke = Folder; CapriDesktop.Program.CheckChess = true; return AppBuilder.Configure<BringTestApp>().UsePlatformDetect().StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown); }
+        if (args.Contains("--computer")) return AppBuilder.Configure<ComputerTestApp>().UsePlatformDetect().StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown);
+        if (args.Contains("--dsh"))
+        {
+            CapriDesktop.Program.Smoke = Folder;
+            CapriDesktop.Program.CheckChess = true;
+            return AppBuilder.Configure<DshTestApp>().UsePlatformDetect().StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown);
+        }
         if (args.Contains("--activity"))
         {
             CapriDesktop.Program.Smoke = Folder;
